@@ -15,27 +15,30 @@ og
 			oil_life
 			temperature
 	house
-		energy
-			battery
-				voltage
-				current
-				soc
-				(charging)
-				(discharging)
-			small_loads
-				current
-			inverter
-				current
-			(solar)
-				(current)
-				(voltage)
-			charger
-				1
-					current
-					enabled
-				2
-					current
-					enabled
+	    charger1
+	        shunt
+	        enabled
+	    charger2
+	        shunt
+	        enabled
+        fuse_panel
+            shunt
+        inverter
+            shunt
+            enabled
+		battery
+			voltage
+			current
+			soc
+			(charging)
+			(discharging)
+			(time_until_full)
+			(time_until_empty)
+
+
+		(solar)
+			(current)
+			(voltage)
 		light
 			ceiling
 		fan

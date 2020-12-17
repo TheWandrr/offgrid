@@ -29,9 +29,70 @@ void ParseMessage(char *msg_buf);
 void PublishRequestReturn(unsigned int address, int data);
 
 enum ReceiveState {
-        GET_STX = 1,
-        GET_DATA = 2,
+        GET_STX,
+        GET_DATA,
 };
+
+struct BridgeMap {
+    const unsigned int address;
+    const char *topic;
+    const bool readable;
+    const bool writable;
+    const char *format; // TODO: Not used at this point
+    const double multiplier;
+};
+
+// Used to translate between memory-mapped variables and MQTT topics
+struct BridgeMap lookup_map[] = {
+    // Switches
+    { 0x10, "og/setting/broadcast_period_ms", 1, 0, "%d", (1) },
+//    { 0x10, "og/setting/broadcast_period_ms/set", 0, 1, "%d", (1) },
+
+    // PWM outputs
+    { 0xA0, "og/house/light/ceiling", 1, 1, "%d", (1) },
+//    { 0xA0, "og/house/light/ceiling/set", 0, 1, "%d", (1) },
+    //{ 0xA1, "", 1, 1, "", (1) },
+    //{ 0xA2, "", 1, 1, "", (1) },
+    //{ 0xA3, "", 1, 1, "", (1) },
+    //{ 0xA4, "", 1, 1, "", (1) },
+    //{ 0xA5, "", 1, 1, "", (1) },
+
+    // ON/OFF outputs
+    //{ 0xA6, "", 1, 1, "", (1) },
+    //{ 0xA7, "", 1, 1, "", (1) },
+
+    // Differential ADC inputs, 75mV shunt ** SIGNED 16 BIT
+    { 0xB0, "og/house/charger1/amps", 1, 0, "%0.2f", (0.0000078125 * 100.0 / 0.075) },
+    { 0xB1, "og/house/fuse_panel/amps", 1, 0, "%0.2f", (0.0000078125 * 50.0 / 0.075) },
+    { 0xB2, "og/house/vehicle_in/amps", 1, 0, "%0.2f", (0.0000078125 * 200.0 / 0.075) },
+    { 0xB3, "og/house/inverter/amps", 1, 0, "%0.2f", (0.0000078125 * 200.0 / 0.075) },
+
+    // Single ended ADC inputs, 12V
+    { 0xB4, "og/house/battery/volts", 1, 0, "%0.2f", (0.000125 * 4 * 1.05350) }, // Calibrated @ 13.85 V
+    { 0xB5, "og/vehicle/battery/volts", 1, 0, "%0.2f", (0.000125 * 4 * 1.04390) }, // Calibrated at 14.42 V
+    //{ 0xB6, "", 1, 1, "", (1) },
+    //{ 0xB7, "", 1, 1, "", (1) },
+};
+
+int AddressToTopic(const unsigned int address) {
+    for (int i = 0; i < sizeof(lookup_map); i++) {
+        if (lookup_map[i].address == address) {
+            return i;
+        }
+    }
+
+    return -1;
+}
+
+int TopicToAddress(const char *topic) {
+    for (int i = 0; i < sizeof(lookup_map); i++) {
+        if ( !strcmp(lookup_map[i].topic, topic) ) {
+            return i;
+        }
+    }
+
+    return -1;
+}
 
 static volatile int running = 1;
 pthread_t process_rx_thread;
@@ -127,7 +188,7 @@ void ParseMessage(char *msg_buf) {
   uint8_t count = 0;
   uint16_t address = 0;
   uint32_t value_buffer = 0;
-  bool invalid_message = false; // TODO: Replace with descriptive error codes later?
+  bool invalid_message = false; // Any invalid message will be ignored.  Reporting anything more isn't useful.
 
   // LIMITED EMBEDDED IMPLEMENTATION
   //   One address and up to four 32-bit parameters will be accepted.  The remainder will be discarded silently.
@@ -154,7 +215,7 @@ void ParseMessage(char *msg_buf) {
     count = 0;
 
     if( !isxdigit(*p) ) {
-      // TODO - ERROR: Address did not start with hex digit
+      // ERROR: Address did not start with hex digit
       invalid_message = true;
       break;
     }
@@ -171,7 +232,7 @@ void ParseMessage(char *msg_buf) {
     //DEBUG//Serial.print('['); Serial.print(address, HEX); Serial.print(']');
 
     if (count > 4) {
-      // TODO: ERROR - address must maximum 4 ASCII-HEX characters
+      // ERROR - address must maximum 4 ASCII-HEX characters
       invalid_message = true;
       break;
     }
@@ -187,7 +248,6 @@ void ParseMessage(char *msg_buf) {
           // Get ascii-hex digits up to comma or end of string
           count = 0;
           value_buffer = 0;
-          //while ( (*p != '\n') && (*p != ',') && isxdigit(*p) && (count < 8) ) {
           while ( isxdigit(*p) ) {
             value_buffer <<= 4;
             value_buffer += asciiHexToInt(*p);
@@ -197,18 +257,17 @@ void ParseMessage(char *msg_buf) {
           }
 
           if (count > 8) {
-            // TODO: ERROR - max data size is 4 bytes or 8 ascii-hex characters
+            // ERROR - max data size is 4 bytes or 8 ascii-hex characters
             invalid_message = true;
             break;
           }
           else {
             // Looks like we have good data.  Do something with it before it goes away in the next loop iteration.
-            //DEBUG//Serial.print(value_buffer, HEX);
             arg[arg_count] = value_buffer;
             arg_count++;
 
             if( arg_count > ( sizeof(arg) / sizeof(arg[0]) ) ) {
-              // TODO - ERROR: IMPOSED EMBEDDED LIMITATION
+              // ERROR: IMPOSED ARBITRARY EMBEDDED LIMITATION
               invalid_message = true;
               break;
             }
@@ -220,7 +279,7 @@ void ParseMessage(char *msg_buf) {
             //DEBUG//Serial.print(';');
           }
           else if (*p != '\0') {
-            // TODO: ERROR - Only a comma or end of string should follow a value
+            // ERROR - Only a comma or end of string should follow a value
             invalid_message = true;
             break;
           }
@@ -229,7 +288,7 @@ void ParseMessage(char *msg_buf) {
 //          // get everything up to comma or end of string
 //        }
         else {
-          // TODO: ERROR - invalid contents
+          // ERROR - invalid contents
           invalid_message = true;
           break;
         }
@@ -242,17 +301,15 @@ void ParseMessage(char *msg_buf) {
 
     }
     else if (*p != '\0') {
-      // TODO - ERROR: Something unexpected followed the address
+      // ERROR: Something unexpected followed the address
       invalid_message = true;
       break;
     }
 
-    //p += sizeof(char);
     p++;
   }
 
   if ( !invalid_message ) {
-    //DEBUG//Serial.println("  <-- VALID");
 
     switch(address) {
 
@@ -272,19 +329,21 @@ void ParseMessage(char *msg_buf) {
 	case MSG_RETURN_8_8:
 		if(arg_count == 2) {
 			printf("UART> MSG_RETURN_8_8: %0.2X, %0.2X\r\n", (uint8_t)arg[0], (uint8_t)arg[1]); fflush(NULL);
-			PublishRequestReturn( (uint8_t)arg[0], (uint8_t)arg[1] );
+			PublishRequestReturn( (uint8_t)arg[0], (int8_t)arg[1] );
 		}
 	break;
 
 	case MSG_RETURN_8_16:
 		if(arg_count == 2) {
 			printf("UART> MSG_RETURN_8_16: %0.2X, %0.4X\r\n", (uint8_t)arg[0], (uint16_t)arg[1]); fflush(NULL);
+			PublishRequestReturn( (uint8_t)arg[0], (int16_t)arg[1] );
 		}
 	break;
 
 	case MSG_RETURN_8_32:
 		if(arg_count == 2) {
 			printf("UART> MSG_RETURN_8_32: %0.2X, %0.8X\r\n", (uint8_t)arg[0], (uint32_t)arg[1]); fflush(NULL);
+			PublishRequestReturn( (uint8_t)arg[0], (int32_t)arg[1] );
 		}
 	break;
     }
@@ -309,25 +368,27 @@ void *ProcessTransmitThread(void *param) {
 //void connect_callback(struct mosquitto *mosq, void *obj, int result) {
 //}
 
-// TODO: Might need to extend this to support nultiple, perhaps variable, data arguments
-// TODO: Maybe create an address<==>topic lookup table and write less repetative code below
 void PublishRequestReturn(unsigned int address, int data) {
 	char payload[256];
 	int payloadlen;
+    int i;
 
-	payloadlen = sprintf( payload, "%d", data ) + 1; // CAUTION: Watch the type and signedness
-
-	switch(address) {
-
-		//case 0xA0: mosquitto_publish(mqtt, NULL, "og/house/light/ceiling", strlen(payload), payload, 0, false);
-		case 0xA0: mosquitto_publish(mqtt, NULL, "og/house/light/ceiling", payloadlen, payload, 0, false);
-		break;
-
-	}
+    if( (i = AddressToTopic(address)) >= 0 ) {
+        payloadlen = sprintf( payload, lookup_map[i].format, data * lookup_map[i].multiplier ) + 1;
+		mosquitto_publish(mqtt, NULL, lookup_map[i].topic, payloadlen, payload, 0, false);
+    }
 }
 
 void message_callback(struct mosquitto *mosq, void *obj, const struct mosquitto_message *message) {
+    int i;
+
 	printf("MQTT> %s = %s\r\n", message->topic, message->payload); fflush(NULL);
+
+//    if( (i = TopicToAddress(message->topic)) >= 0) {
+        // Need to know byte length for message from map structure
+        // check writable flag before writing
+
+//    }
 
 	if ( !strcmp("og/house/light/ceiling/set", message->topic) ) {
 		// TODO: Replace with better call to send the message
