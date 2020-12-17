@@ -12,10 +12,13 @@
 
 #include <systemd/sd-daemon.h>
 
+#include <mosquitto.h>
 #include <wiringSerial.h>
 //#include <argp.h>
 
 #include "offgrid_constants.h"
+
+// TODO: Implement control over how much information is output to logs
 
 //const char *argp_program_version = "offgrid-daemon 0.0.1";
 //const char *argp_program_bug_address = "";
@@ -23,6 +26,7 @@
 //static char doc[] = "Offgrid hardware daemon -- UART to MQTT bridge";
 
 void ParseMessage(char *msg_buf);
+void PublishRequestReturn(unsigned int address, int data);
 
 enum ReceiveState {
         GET_STX = 1,
@@ -33,26 +37,19 @@ static volatile int running = 1;
 pthread_t process_rx_thread;
 pthread_t process_tx_thread;
 
+const char *mqtt_host = "localhost";
+const unsigned int mqtt_port = 1883;
+
 // TODO: Eventually move these to classes
 int fd; // File descriptor for serial port
 // TODO: Circular Buffer rx_uart
 // TODO: Circular Buffer tx_uart
 static char message_buffer[32] = {0}; // KEEP INCOMING MESSAGES SMALL!
+struct mosquitto *mqtt;
 
 void SignalHandler(int signum)
 {
 	running = 0;
-
-	printf("Waiting for threads to stop...\r\n");
-	fflush(NULL);
-
-	pthread_join(process_rx_thread, NULL);
-	pthread_join(process_tx_thread, NULL);
-
-	printf("...Threads stopped\r\n");
-	fflush(NULL);
-
-	exit(signum);
 }
 
 // TODO: Change this to a variadic function so we can use format strings and arguments
@@ -90,18 +87,12 @@ void *ProcessReceiveThread(void *param) {
 					else if( c == '\x03' ) {
 						////Serial.println("<ETX>");
 						ParseMessage(message_buffer);
-						//receive_state = GET_STX;
-						//received_message = true;
-						//printf("%s\r\n", message_buffer);
-						//fflush(NULL);
+						receive_state = GET_STX;
 					}
 					else if( c == '\x02' ) {
 						// ERROR - expected ETX before STX
 						////Serial.print("   <<<   MISSING ETX\r\n<RECOVER-STX>");
-
-						// TODO: Clear any buffered data
-						// TODO: Set things up the same as though we've receiv$
-
+						printf("UART> ERROR: New packet began before previous packet finished\r\n");
 						strncpy(message_buffer, "", sizeof(message_buffer));
 					}
 				break;
@@ -265,31 +256,35 @@ void ParseMessage(char *msg_buf) {
 
     switch(address) {
 
-      case MSG_KEEP_ALIVE: // Sent by system master (or designate) to ensure bus is operating.  This module will be automatically reset by the watchdog timer if not received in time.
-        if(arg_count == 1) {
-          printf("Received keep alive message\r\n");
-	  fflush(NULL);
-        }
-        break;
+	case MSG_KEEP_ALIVE: // Sent by system master (or designate) to ensure bus is operating.  This module will be automatically reset by the watchdog timer if not received in time.
+		if(arg_count == 1) {
+			printf("UART> MSG_KEEP_ALIVE: %0.2X\r\n", (uint8_t)arg[0]); fflush(NULL);
+			mosquitto_publish(mqtt, NULL, "og/status/tick", 0, "", 0, false);
+		}
+	break;
+
+	case MSG_GET_SET_ERROR:
+		if(arg_count == 1) {
+			printf("UART> MSG_GET_SET_ERROR: %0.2X\r\n", (uint8_t)arg[0]); fflush(NULL);
+		}
+	break;
 
 	case MSG_RETURN_8_8:
 		if(arg_count == 2) {
-			printf("MSG_RETURN_8_8 >>>  %0.2X, %0.2X\r\n", (uint8_t)arg[0], (uint8_t)arg[1]);
-			fflush(NULL);
+			printf("UART> MSG_RETURN_8_8: %0.2X, %0.2X\r\n", (uint8_t)arg[0], (uint8_t)arg[1]); fflush(NULL);
+			PublishRequestReturn( (uint8_t)arg[0], (uint8_t)arg[1] );
 		}
 	break;
 
 	case MSG_RETURN_8_16:
 		if(arg_count == 2) {
-			printf("MSG_RETURN_8_16 >>>  %0.2X, %0.4X\r\n", (uint8_t)arg[0], (uint16_t)arg[1]);
-			fflush(NULL);
+			printf("UART> MSG_RETURN_8_16: %0.2X, %0.4X\r\n", (uint8_t)arg[0], (uint16_t)arg[1]); fflush(NULL);
 		}
 	break;
 
 	case MSG_RETURN_8_32:
 		if(arg_count == 2) {
-			printf("MSG_RETURN_8_32 >>>   %0.2X, %0.8X\r\n", (uint8_t)arg[0], (uint32_t)arg[1]);
-			fflush(NULL);
+			printf("UART> MSG_RETURN_8_32: %0.2X, %0.8X\r\n", (uint8_t)arg[0], (uint32_t)arg[1]); fflush(NULL);
 		}
 	break;
     }
@@ -311,26 +306,106 @@ void *ProcessTransmitThread(void *param) {
 
 // TODO: enqueueMessage - add message to transmit queue, use variadic function printf style
 
+//void connect_callback(struct mosquitto *mosq, void *obj, int result) {
+//}
+
+// TODO: Might need to extend this to support nultiple, perhaps variable, data arguments
+// TODO: Maybe create an address<==>topic lookup table and write less repetative code below
+void PublishRequestReturn(unsigned int address, int data) {
+	char payload[256];
+	int payloadlen;
+
+	payloadlen = sprintf( payload, "%d", data ) + 1; // CAUTION: Watch the type and signedness
+
+	switch(address) {
+
+		//case 0xA0: mosquitto_publish(mqtt, NULL, "og/house/light/ceiling", strlen(payload), payload, 0, false);
+		case 0xA0: mosquitto_publish(mqtt, NULL, "og/house/light/ceiling", payloadlen, payload, 0, false);
+		break;
+
+	}
+}
+
+void message_callback(struct mosquitto *mosq, void *obj, const struct mosquitto_message *message) {
+	printf("MQTT> %s = %s\r\n", message->topic, message->payload); fflush(NULL);
+
+	if ( !strcmp("og/house/light/ceiling/set", message->topic) ) {
+		// TODO: Replace with better call to send the message
+		serialPutchar(fd, '\x02');
+		serialPrintf( fd, "12:A0,%0.2X", (uint8_t)(atoi(message->payload)) );
+		serialPutchar(fd, '\x03');
+
+	}
+}
+
 int main (int argc, char** argv) {
+
+	int status;
+	char client_id[30];
 
 	signal(SIGINT, SignalHandler);
 	signal(SIGHUP, SignalHandler);
-	signal(SIGINT, SignalHandler);
+	signal(SIGTERM, SignalHandler);
 
+	// SETUP UART
         if ((fd = serialOpen ("/dev/ttyS0", 115200)) < 0) {
-                fprintf (stderr, "Unable to open serial device: %s\n", strerror (errno));
+                fprintf (stderr, "Unable to open serial device: %s\n", strerror(errno));
                 return 1;
         }
 
+	// SETUP MQTT
+	mosquitto_lib_init();
+	snprintf(client_id, sizeof(client_id)-1, "offgrid-daemon-%d", getpid());
+
+	if( (mqtt = mosquitto_new(client_id, true, NULL)) != NULL ) { // TODO: Replace NULL with pointer to data structure that will be passed to callbacks
+		//mosquitto_connect_callback_set(mqtt, connect_callback);
+		mosquitto_message_callback_set(mqtt, message_callback);
+
+		if( (mosquitto_connect(mqtt, mqtt_host, mqtt_port, 15)) == MOSQ_ERR_SUCCESS ) {
+			mosquitto_subscribe(mqtt, NULL, "og/#", 0);
+			mosquitto_loop_start(mqtt);
+		}
+		else {
+                	fprintf (stderr, "Unable to connect with MQTT broker (%s:%s): %s\n", mqtt_host, mqtt_port, strerror(errno));
+		}
+	}
+	else {
+                fprintf (stderr, "Unable to create MQTT client: %s\n", strerror(errno));
+		return 1;
+	}
+
+	// SETUP THREADS
 	pthread_create(&process_rx_thread, NULL, ProcessReceiveThread, NULL);
 	pthread_create(&process_tx_thread, NULL, ProcessTransmitThread, NULL);
 
 	sd_notify (0, "READY=1"); // Tell systemd we're ready
 
 	while(running) {
+
+		if(running && status) {
+			mosquitto_reconnect(mqtt);
+		}
+
 		sleep(5);
 		sd_notify(0, "WATCHDOG=1"); // Tells systemd to reset it's watchdog timer
+
 	}
+
+	printf("Waiting for threads to terminate...\r\n");
+	fflush(NULL);
+
+	pthread_join(process_rx_thread, NULL);
+	pthread_join(process_tx_thread, NULL);
+
+	printf("...Threads terminated\r\n");
+	fflush(NULL);
+
+	mosquitto_loop_stop(mqtt, true);
+
+	mosquitto_destroy(mqtt);
+	mosquitto_lib_cleanup();
+
+	// TODO: Any other cleanup actions?
 
 	return (EXIT_SUCCESS);
 }

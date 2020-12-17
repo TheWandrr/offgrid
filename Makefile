@@ -26,4 +26,5 @@ install : all
 	cp ./offgrid-daemon.service /etc/systemd/system/
 	cp ./offgrid-daemon /usr/local/lib/
 	systemctl daemon-reload
+	systemctl enable offgrid-daemon
 	systemctl restart offgrid-daemon

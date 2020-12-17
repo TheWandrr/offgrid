@@ -1,6 +1,6 @@
 [Unit]
 Description=Offgrid Daemon
-#Requires=mosquitto
+Requires=mosquitto.service
 [Service]
 Type=simple
 ExecStart=/usr/local/lib/offgrid-daemon
