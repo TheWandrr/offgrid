@@ -62,7 +62,7 @@ struct BridgeMap lookup_map[] = {
     //{ 0xA7, "", 1, 1, "", (1) },
 
     // Differential ADC inputs, 75mV shunt ** SIGNED 16 BIT
-    { 0xB0, "og/house/charger1/amps", 1, 0, "%0.2f", (0.0000078125 * 100.0 / 0.075) },
+    { 0xB0, "og/house/battery/amps", 1, 0, "%0.2f", (0.0000078125 * 500.0 / 0.050 * 1.031) }, // Calibrated at 2.47A
     { 0xB1, "og/house/fuse_panel/amps", 1, 0, "%0.2f", (0.0000078125 * 50.0 / 0.075) },
     { 0xB2, "og/house/vehicle_in/amps", 1, 0, "%0.2f", (0.0000078125 * 200.0 / 0.075) },
     { 0xB3, "og/house/inverter/amps", 1, 0, "%0.2f", (0.0000078125 * 200.0 / 0.075) },
@@ -73,6 +73,18 @@ struct BridgeMap lookup_map[] = {
     //{ 0xB6, "", 1, 1, "", (1) },
     //{ 0xB7, "", 1, 1, "", (1) },
 };
+
+static volatile int running = 1;
+pthread_t process_rx_thread;
+pthread_t process_tx_thread;
+pthread_t process_sunrise;
+pthread_t process_state_of_charge;
+
+double house_battery_amps = 0;
+double house_battery_volts = 0;
+
+const char *mqtt_host = "localhost";
+const unsigned int mqtt_port = 1883;
 
 int AddressToTopic(const unsigned int address) {
     for (int i = 0; i < sizeof(lookup_map); i++) {
@@ -94,12 +106,6 @@ int TopicToAddress(const char *topic) {
     return -1;
 }
 
-static volatile int running = 1;
-pthread_t process_rx_thread;
-pthread_t process_tx_thread;
-
-const char *mqtt_host = "localhost";
-const unsigned int mqtt_port = 1883;
 
 // TODO: Eventually move these to classes
 int fd; // File descriptor for serial port
@@ -376,6 +382,14 @@ void PublishRequestReturn(unsigned int address, int data) {
     if( (i = AddressToTopic(address)) >= 0 ) {
         payloadlen = sprintf( payload, lookup_map[i].format, data * lookup_map[i].multiplier ) + 1;
 		mosquitto_publish(mqtt, NULL, lookup_map[i].topic, payloadlen, payload, 0, false);
+
+        // TODO: Need to know if this has stagnated
+        if( !strcmp(lookup_map[i].topic, "og/house/battery/amps") ) {
+            house_battery_amps = data * lookup_map[i].multiplier;
+        }
+        else if( !strcmp(lookup_map[i].topic, "og/house/battery/volts") ) {
+            house_battery_volts = data * lookup_map[i].multiplier;
+        }
     }
 }
 
@@ -397,6 +411,118 @@ void message_callback(struct mosquitto *mosq, void *obj, const struct mosquitto_
 		serialPutchar(fd, '\x03');
 
 	}
+}
+
+void *ProcessStateOfCharge(void *param) {
+    const int sample_period_us = 1000000;
+    const double charged_voltage = 14.4;
+    const double tail_current_percent = 0.04;
+    const double peukert_exponent = 1.05;
+    const double current_threshold = 0.1;
+    double copy_house_battery_amps;
+    double copy_house_battery_volts;
+    const int charge_efficiency = 99;
+    const int charged_detect_time_m = 3;
+    const int capacity = 198;
+    bool sync_pending = false;
+    time_t sample_start_time, sample_end_time, sync_pending_begin_time;
+    double ah_change = 0;
+    double ah_cumulative = 0; // Goes negative as battery is discharged
+    double state_of_charge = 0;
+
+    enum ChargeState {
+        CS_DISCHARGING,
+        CS_CHARGING,
+        CS_CHARGED,
+        CS_SYNC_PENDING,
+    } charge_state = CS_DISCHARGING;
+
+	char payload[16];
+	int payloadlen;
+
+    time(&sample_start_time);
+
+    while(running) {
+
+        usleep(sample_period_us);
+
+        // TODO: MUTEX? >>
+        copy_house_battery_amps = house_battery_amps;
+        copy_house_battery_volts = house_battery_volts;
+        // << MUTEX?
+
+        time(&sample_end_time);
+
+        ah_change = difftime(sample_end_time, sample_start_time) / 3600 * copy_house_battery_amps;
+
+        //printf("## delta_T: %0.4f / AH Change: %0.6f\r\n", difftime(sample_end_time, sample_start_time), ah_change);
+
+        //if(charge_state == CS_CHARGING) {
+        //    ah_change *= (charge_efficiency / 100);
+        //}
+
+        ah_cumulative += ah_change;
+
+        // If this hits 100 but the current is still high, we could flag that it's out of sync
+        state_of_charge = min(100, ( (capacity + ah_cumulative) / capacity ) * 100);
+
+        // >>> MQTT
+        payloadlen = sprintf( payload, "%0.4f", state_of_charge ) + 1;
+		mosquitto_publish(mqtt, NULL, "og/house/battery/soc", payloadlen, payload, 0, false);
+        payloadlen = sprintf( payload, "%d", charge_state ) + 1;
+		mosquitto_publish(mqtt, NULL, "og/house/battery/charge_state", payloadlen, payload, 0, false);
+
+        switch(charge_state) {
+
+            case CS_CHARGING:
+                if(ah_change < 0) {
+                    charge_state = CS_DISCHARGING;
+                }
+                else if (ah_change > 0) {
+                    if( (house_battery_volts >= charged_voltage) &&
+                        (house_battery_amps <= tail_current_percent) ) {
+
+                        // Set a timestamp, time_since_sinc_pending_started
+                        time(&sync_pending_begin_time);
+                        sync_pending  = true;
+
+                        if ( (sync_pending) && 
+                             (difftime(sync_pending_begin_time, sample_end_time) >= charged_detect_time_m) ) {
+                            state_of_charge = 100;
+                            ah_cumulative = 0;
+                            charge_state = CS_CHARGED;
+                        }
+                    }
+                }
+            break;
+
+            case CS_DISCHARGING:
+                if(ah_change > 0) {
+                    charge_state = CS_CHARGING;
+                }
+            break;
+
+            case CS_CHARGED:
+                if(ah_change < 0) {
+                    charge_state = CS_DISCHARGING;
+                }
+                else if(ah_change > 0) {
+                    charge_state = CS_CHARGING;
+                }
+            break;
+
+        }
+
+        sample_start_time = sample_end_time;
+    }
+}
+
+
+
+void *ProcessSunrise(void *param) {
+    while(running) {
+
+    }
 }
 
 int main (int argc, char** argv) {
@@ -436,8 +562,11 @@ int main (int argc, char** argv) {
 	}
 
 	// SETUP THREADS
+    // TODO: Check return code, exit with error if any of these threads can't be created
 	pthread_create(&process_rx_thread, NULL, ProcessReceiveThread, NULL);
 	pthread_create(&process_tx_thread, NULL, ProcessTransmitThread, NULL);
+    pthread_create(&process_sunrise, NULL, ProcessSunrise, NULL);
+    pthread_create(&process_state_of_charge, NULL, ProcessStateOfCharge, NULL);
 
 	sd_notify (0, "READY=1"); // Tell systemd we're ready
 
@@ -457,6 +586,8 @@ int main (int argc, char** argv) {
 
 	pthread_join(process_rx_thread, NULL);
 	pthread_join(process_tx_thread, NULL);
+    pthread_join(process_sunrise, NULL);
+    pthread_join(process_state_of_charge, NULL);
 
 	printf("...Threads terminated\r\n");
 	fflush(NULL);
