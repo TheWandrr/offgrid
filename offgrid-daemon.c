@@ -62,10 +62,10 @@ struct BridgeMap lookup_map[] = {
     //{ 0xA7, "", 1, 1, "", (1) },
 
     // Differential ADC inputs, 75mV shunt ** SIGNED 16 BIT
-    { 0xB0, "og/house/battery/amps", 1, 0, "%0.2f", (0.0000078125 * 500.0 / 0.050 * 1.031) }, // Calibrated at 2.47A
-    { 0xB1, "og/house/fuse_panel/amps", 1, 0, "%0.2f", (0.0000078125 * 50.0 / 0.075) },
-    { 0xB2, "og/house/vehicle_in/amps", 1, 0, "%0.2f", (0.0000078125 * 200.0 / 0.075) },
-    { 0xB3, "og/house/inverter/amps", 1, 0, "%0.2f", (0.0000078125 * 200.0 / 0.075) },
+    { 0xB0, "og/house/battery/amps", 1, 0, "%0.1f", (0.0000078125 * 500.0 / 0.050 * 1.031) }, // Calibrated at 2.47A
+    { 0xB1, "og/house/fuse_panel/amps", 1, 0, "%0.1f", (0.0000078125 * 50.0 / 0.075) },
+    { 0xB2, "og/house/vehicle_in/amps", 1, 0, "%0.1f", (0.0000078125 * 200.0 / 0.075) },
+    { 0xB3, "og/house/inverter/amps", 1, 0, "%0.1f", (0.0000078125 * 200.0 / 0.075) },
 
     // Single ended ADC inputs, 12V
     { 0xB4, "og/house/battery/volts", 1, 0, "%0.2f", (0.000125 * 4 * 1.05350) }, // Calibrated @ 13.85 V
@@ -82,6 +82,11 @@ pthread_t process_state_of_charge;
 
 double house_battery_amps = 0;
 double house_battery_volts = 0;
+
+// TODO: This needs to be initialized from persistent storage - database?
+// --OR-- have this calculated in Arduino firmware instead of here
+double ah_cumulative = 0; // Goes negative as battery is discharged
+const int capacity = 198;
 
 const char *mqtt_host = "localhost";
 const unsigned int mqtt_port = 1883;
@@ -409,7 +414,11 @@ void message_callback(struct mosquitto *mosq, void *obj, const struct mosquitto_
 		serialPutchar(fd, '\x02');
 		serialPrintf( fd, "12:A0,%0.2X", (uint8_t)(atoi(message->payload)) );
 		serialPutchar(fd, '\x03');
-
+	}
+	else if ( !strcmp("og/house/battery/soc/set", message->topic) ) {
+        // TODO: Needs some validation and range constraints
+        //printf("Force consumed Ah = %0.2f\r\n", ah_cumulative);
+        ah_cumulative = -(((100 - atof(message->payload)) / 100) * capacity);
 	}
 }
 
@@ -423,11 +432,9 @@ void *ProcessStateOfCharge(void *param) {
     double copy_house_battery_volts;
     const int charge_efficiency = 99;
     const int charged_detect_time_m = 3;
-    const int capacity = 198;
     bool sync_pending = false;
     time_t sample_start_time, sample_end_time, sync_pending_begin_time;
     double ah_change = 0;
-    double ah_cumulative = 0; // Goes negative as battery is discharged
     double state_of_charge = 0;
 
     enum ChargeState {
@@ -461,13 +468,16 @@ void *ProcessStateOfCharge(void *param) {
         //    ah_change *= (charge_efficiency / 100);
         //}
 
+        // TODO: MUTEX? >>
         ah_cumulative += ah_change;
+        // << MUTEX?
 
         // If this hits 100 but the current is still high, we could flag that it's out of sync
-        state_of_charge = min(100, ( (capacity + ah_cumulative) / capacity ) * 100);
+        state_of_charge =  ( (capacity + ah_cumulative) / capacity) * 100;
+        //if(state_of_charge > 100) state_of_charge = 100; // no min function
 
         // >>> MQTT
-        payloadlen = sprintf( payload, "%0.4f", state_of_charge ) + 1;
+        payloadlen = sprintf( payload, "%0.1f", state_of_charge ) + 1;
 		mosquitto_publish(mqtt, NULL, "og/house/battery/soc", payloadlen, payload, 0, false);
         payloadlen = sprintf( payload, "%d", charge_state ) + 1;
 		mosquitto_publish(mqtt, NULL, "og/house/battery/charge_state", payloadlen, payload, 0, false);
