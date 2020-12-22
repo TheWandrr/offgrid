@@ -26,7 +26,7 @@
 //static char doc[] = "Offgrid hardware daemon -- UART to MQTT bridge";
 
 void ParseMessage(char *msg_buf);
-void PublishRequestReturn(unsigned int address, int data);
+void PublishRequestReturn(unsigned int address, long data);
 
 enum ReceiveState {
         GET_STX,
@@ -35,6 +35,7 @@ enum ReceiveState {
 
 struct BridgeMap {
     const unsigned int address;
+    const unsigned int bytes;
     const char *topic;
     const bool readable;
     const bool writable;
@@ -45,33 +46,42 @@ struct BridgeMap {
 // Used to translate between memory-mapped variables and MQTT topics
 struct BridgeMap lookup_map[] = {
     // Switches
-    { 0x10, "og/setting/broadcast_period_ms", 1, 0, "%d", (1) },
-//    { 0x10, "og/setting/broadcast_period_ms/set", 0, 1, "%d", (1) },
+    { 0x10, 4, "og/setting/broadcast_period_ms", 1, 1, "%d", (1) },
+
+    // Firmware battery monitor variables
+    { 0x20, 2, "og/batmon/bank0/volts", 1, 0, "%0.2f", 0.01 },
+    { 0x21, 2, "og/batmon/bank0/amps", 1, 0, "%0.1f", 0.1 },
+    { 0x22, 2, "og/batmon/bank0/ah", 1, 1, "%0.1f", 0.1 },
+    { 0x23, 2, "og/batmon/bank0/soc", 1, 1, "%0.1f", 0.01 },
+
+//    { 0x28, 2, "og/batmon/bank1/volts", 1, 0, "%0.2f", 0.01 },
+//    { 0x29, 2, "og/batmon/bank1/amps", 1, 0, "%0.1f", 0.1 },
+//    { 0x2A, 2, "og/batmon/bank1/ah", 1, 1, "%0.1f", 0.1 },
+//    { 0x2B, 2, "og/batmon/bank1/soc", 1, 1, "%0.1f", 0.01 },
 
     // PWM outputs
-    { 0xA0, "og/house/light/ceiling", 1, 1, "%d", (1) },
-//    { 0xA0, "og/house/light/ceiling/set", 0, 1, "%d", (1) },
-    //{ 0xA1, "", 1, 1, "", (1) },
-    //{ 0xA2, "", 1, 1, "", (1) },
-    //{ 0xA3, "", 1, 1, "", (1) },
-    //{ 0xA4, "", 1, 1, "", (1) },
-    //{ 0xA5, "", 1, 1, "", (1) },
+    { 0xA0, 1, "og/house/light/ceiling", 1, 1, "%d", 1 },
+    //{ 0xA1, 1, "", 1, 1, "", (1) },
+    //{ 0xA2, 1, "", 1, 1, "", (1) },
+    //{ 0xA3, 1, "", 1, 1, "", (1) },
+    //{ 0xA4, 1, "", 1, 1, "", (1) },
+    //{ 0xA5, 1, "", 1, 1, "", (1) },
 
     // ON/OFF outputs
-    //{ 0xA6, "", 1, 1, "", (1) },
-    //{ 0xA7, "", 1, 1, "", (1) },
+    //{ 0xA6, 1, "", 1, 1, "", (1) },
+    //{ 0xA7, 1, "", 1, 1, "", (1) },
 
     // Differential ADC inputs, 75mV shunt ** SIGNED 16 BIT
-    { 0xB0, "og/house/battery/amps", 1, 0, "%0.1f", (0.0000078125 * 500.0 / 0.050 * 1.031) }, // Calibrated at 2.47A
-    { 0xB1, "og/house/fuse_panel/amps", 1, 0, "%0.1f", (0.0000078125 * 50.0 / 0.075) },
-    { 0xB2, "og/house/vehicle_in/amps", 1, 0, "%0.1f", (0.0000078125 * 200.0 / 0.075) },
-    { 0xB3, "og/house/inverter/amps", 1, 0, "%0.1f", (0.0000078125 * 200.0 / 0.075) },
+    { 0xB0, 2, "og/house/battery/amps", 1, 0, "%0.1f", (0.0000078125 * 500.0 / 0.050 * 1.031) }, // Calibrated at 2.47A
+    { 0xB1, 2, "og/house/fuse_panel/amps", 1, 0, "%0.1f", (0.0000078125 * 50.0 / 0.075) },
+    { 0xB2, 2, "og/house/vehicle_in/amps", 1, 0, "%0.1f", (0.0000078125 * 200.0 / 0.075) },
+    { 0xB3, 2, "og/house/inverter/amps", 1, 0, "%0.1f", (0.0000078125 * 200.0 / 0.075) },
 
     // Single ended ADC inputs, 12V
-    { 0xB4, "og/house/battery/volts", 1, 0, "%0.2f", (0.000125 * 4 * 1.05350) }, // Calibrated @ 13.85 V
-    { 0xB5, "og/vehicle/battery/volts", 1, 0, "%0.2f", (0.000125 * 4 * 1.04390) }, // Calibrated at 14.42 V
-    //{ 0xB6, "", 1, 1, "", (1) },
-    //{ 0xB7, "", 1, 1, "", (1) },
+    { 0xB4, 2, "og/house/battery/volts", 1, 0, "%0.2f", (0.000125 * 4 * 1.05350) }, // Calibrated @ 13.85 V
+    { 0xB5, 2, "og/vehicle/battery/volts", 1, 0, "%0.2f", (0.000125 * 4 * 1.04390) }, // Calibrated at 14.42 V
+    //{ 0xB6, 2, "", 1, 1, "", (1) },
+    //{ 0xB7, 2, "", 1, 1, "", (1) },
 };
 
 static volatile int running = 1;
@@ -92,7 +102,9 @@ const char *mqtt_host = "localhost";
 const unsigned int mqtt_port = 1883;
 
 int AddressToTopic(const unsigned int address) {
-    for (int i = 0; i < sizeof(lookup_map); i++) {
+    int i;
+
+    for (i = 0; i < ( sizeof(lookup_map) / sizeof(lookup_map[0]) ); i++) {
         if (lookup_map[i].address == address) {
             return i;
         }
@@ -102,8 +114,12 @@ int AddressToTopic(const unsigned int address) {
 }
 
 int TopicToAddress(const char *topic) {
-    for (int i = 0; i < sizeof(lookup_map); i++) {
+    int i;
+
+    for (i = 0; i < ( sizeof(lookup_map) / sizeof(lookup_map[0]) ); i++) {
         if ( !strcmp(lookup_map[i].topic, topic) ) {
+
+            //printf("TopicToAddress MATCHED: %s at i=%d\r\n", topic, i);
             return i;
         }
     }
@@ -125,11 +141,11 @@ void SignalHandler(int signum)
 }
 
 // TODO: Change this to a variadic function so we can use format strings and arguments
-void send_message(const char *message) {
-	serialPutchar(fd, '\x02');
-	serialPrintf(fd, message);
-	serialPutchar(fd, '\x03');
-}
+//void send_message(const char *message) {
+//	serialPutchar(fd, '\x02');
+//	serialPrintf(fd, message);
+//	serialPutchar(fd, '\x03');
+//}
 
 void *ProcessReceiveThread(void *param) {
 	static enum ReceiveState receive_state = GET_STX;
@@ -164,7 +180,7 @@ void *ProcessReceiveThread(void *param) {
 					else if( c == '\x02' ) {
 						// ERROR - expected ETX before STX
 						////Serial.print("   <<<   MISSING ETX\r\n<RECOVER-STX>");
-						printf("UART> ERROR: New packet began before previous packet finished\r\n");
+						printf("<UART> ERROR: New packet began before previous packet finished\r\n");
 						strncpy(message_buffer, "", sizeof(message_buffer));
 					}
 				break;
@@ -326,34 +342,35 @@ void ParseMessage(char *msg_buf) {
 
 	case MSG_KEEP_ALIVE: // Sent by system master (or designate) to ensure bus is operating.  This module will be automatically reset by the watchdog timer if not received in time.
 		if(arg_count == 1) {
-			printf("UART> MSG_KEEP_ALIVE: %0.2X\r\n", (uint8_t)arg[0]); fflush(NULL);
+			printf(">> <UART> MSG_KEEP_ALIVE: %0.2X\r\n", (uint8_t)arg[0]); fflush(NULL);
 			mosquitto_publish(mqtt, NULL, "og/status/tick", 0, "", 0, false);
+	        printf("<< <MQTT> %s = %s\r\n", "og/status/tick", ""); fflush(NULL);
 		}
 	break;
 
 	case MSG_GET_SET_ERROR:
 		if(arg_count == 1) {
-			printf("UART> MSG_GET_SET_ERROR: %0.2X\r\n", (uint8_t)arg[0]); fflush(NULL);
+			printf(">> <UART> MSG_GET_SET_ERROR: %0.2X\r\n", (uint8_t)arg[0]); fflush(NULL);
 		}
 	break;
 
 	case MSG_RETURN_8_8:
 		if(arg_count == 2) {
-			printf("UART> MSG_RETURN_8_8: %0.2X, %0.2X\r\n", (uint8_t)arg[0], (uint8_t)arg[1]); fflush(NULL);
+			printf(">> <UART> MSG_RETURN_8_8: %0.2X, %0.2X\r\n", (uint8_t)arg[0], (uint8_t)arg[1]); fflush(NULL);
 			PublishRequestReturn( (uint8_t)arg[0], (int8_t)arg[1] );
 		}
 	break;
 
 	case MSG_RETURN_8_16:
 		if(arg_count == 2) {
-			printf("UART> MSG_RETURN_8_16: %0.2X, %0.4X\r\n", (uint8_t)arg[0], (uint16_t)arg[1]); fflush(NULL);
+			printf(">> <UART> MSG_RETURN_8_16: %0.2X, %0.4X\r\n", (uint8_t)arg[0], (uint16_t)arg[1]); fflush(NULL);
 			PublishRequestReturn( (uint8_t)arg[0], (int16_t)arg[1] );
 		}
 	break;
 
 	case MSG_RETURN_8_32:
 		if(arg_count == 2) {
-			printf("UART> MSG_RETURN_8_32: %0.2X, %0.8X\r\n", (uint8_t)arg[0], (uint32_t)arg[1]); fflush(NULL);
+			printf(">> <UART> MSG_RETURN_8_32: %0.2X, %0.8X\r\n", (uint8_t)arg[0], (uint32_t)arg[1]); fflush(NULL);
 			PublishRequestReturn( (uint8_t)arg[0], (int32_t)arg[1] );
 		}
 	break;
@@ -379,13 +396,15 @@ void *ProcessTransmitThread(void *param) {
 //void connect_callback(struct mosquitto *mosq, void *obj, int result) {
 //}
 
-void PublishRequestReturn(unsigned int address, int data) {
+void PublishRequestReturn(unsigned int address, long data) {
 	char payload[256];
 	int payloadlen;
     int i;
 
     if( (i = AddressToTopic(address)) >= 0 ) {
         payloadlen = sprintf( payload, lookup_map[i].format, data * lookup_map[i].multiplier ) + 1;
+        //printf("Payload --> %s", payload);
+        printf("<< <MQTT> %s = %s\r\n", lookup_map[i].topic, payload); fflush(NULL);
 		mosquitto_publish(mqtt, NULL, lookup_map[i].topic, payloadlen, payload, 0, false);
 
         // TODO: Need to know if this has stagnated
@@ -398,28 +417,86 @@ void PublishRequestReturn(unsigned int address, int data) {
     }
 }
 
+bool StringHasSuffix(const char *s, const char *suffix) {
+    int suffix_len = strlen(suffix);
+    int s_len = strlen(s);
+    int diff_len = s_len - suffix_len;
+
+    if( (suffix_len > 0) && ( s_len > 0) && (diff_len >= 0) ) {
+        for (int i = s_len - 1; i >= (diff_len); i --) {
+            if( s[i] != suffix[i - diff_len] ) {
+                return false;
+            }
+        }
+        return true;
+    }
+    return false;
+}
+
 void message_callback(struct mosquitto *mosq, void *obj, const struct mosquitto_message *message) {
     int i;
+    char *suffix = "/set";
+    char topic[255];
+    int newlen;
 
-	printf("MQTT> %s = %s\r\n", message->topic, message->payload); fflush(NULL);
+	printf(">> <MQTT> %s = %s\r\n", message->topic, message->payload); fflush(NULL);
 
-//    if( (i = TopicToAddress(message->topic)) >= 0) {
-        // Need to know byte length for message from map structure
-        // check writable flag before writing
+    // *** If message ends with "/set", it needs to be handled differently
+    if( StringHasSuffix(message->topic, suffix) ) {
+        //printf("SET message found: %s\r\n", message->topic);
 
-//    }
+        // Strip suffix and try to match
+        newlen = strlen(message->topic) - strlen(suffix);
+        newlen = ( (newlen > 254) ? 254 : newlen);
+        strncpy(topic, message->topic, newlen);
+        topic[newlen] = '\0';
+        //printf("Stripped Topic: %s\r\n", topic);
 
-	if ( !strcmp("og/house/light/ceiling/set", message->topic) ) {
-		// TODO: Replace with better call to send the message
-		serialPutchar(fd, '\x02');
-		serialPrintf( fd, "12:A0,%0.2X", (uint8_t)(atoi(message->payload)) );
-		serialPutchar(fd, '\x03');
-	}
-	else if ( !strcmp("og/house/battery/soc/set", message->topic) ) {
-        // TODO: Needs some validation and range constraints
-        //printf("Force consumed Ah = %0.2f\r\n", ah_cumulative);
-        ah_cumulative = -(((100 - atof(message->payload)) / 100) * capacity);
-	}
+        if( (i = TopicToAddress(topic)) >= 0) {
+            // Need to know byte length for message from map structure
+            // check writable flag before writing
+            //printf("SET matched topic: %d, %s\r\n", i, lookup_map[i].topic);
+            if( (lookup_map[i].writable == 1) && (lookup_map[i].bytes > 0) ) {
+
+                serialPutchar(fd, '\x02');
+
+                switch(lookup_map[i].bytes) {
+
+                    case 1:
+			            printf("<< <UART> MSG_SET_8_8: %0.2X, %0.2X\r\n", (uint8_t)lookup_map[i].address, (uint8_t)(atoi(message->payload))); fflush(NULL);
+		                serialPrintf( fd, "%0.2X:%0.2X,%0.2X", (uint8_t)MSG_SET_8_8, (uint8_t)lookup_map[i].address, (uint8_t)(atoi(message->payload)) );
+                    break;
+
+                    case 2:
+		           		printf("<< <UART> MSG_SET_8_16: %0.2X, %0.4X\r\n", (uint8_t)lookup_map[i].address, (uint16_t)(atoi(message->payload))); fflush(NULL);
+                        serialPrintf( fd, "%0.2X:%0.2X,%0.4X", (uint8_t)MSG_SET_8_16, (uint8_t)lookup_map[i].address, (uint16_t)(atoi(message->payload)) );
+                    break;
+
+//                    case 3:
+//		                serialPrintf( fd, "0.2X:%0.2X,%0.6X", (uint8_t)MSG_SET_8_24, (uint8_t)lookup_map[i].address, (uint32_t)(atoi(message->payload)) );
+//                    break;
+
+                    case 4:
+			            printf("<< <UART> MSG_SET_8_32: %0.2X, %0.8X\r\n", (uint8_t)lookup_map[i].address, (uint32_t)(atoll(message->payload))); fflush(NULL);
+		                serialPrintf( fd, "%0.2X:%0.2X,%0.8X", (uint8_t)MSG_SET_8_32, (uint8_t)lookup_map[i].address, (uint32_t)(atoi(message->payload)) );
+                    break;
+                }
+
+                serialPutchar(fd, '\x03');
+            }
+        }
+    }
+    else {
+    }
+
+//	if ( !strcmp("og/house/light/ceiling/set", message->topic) ) {
+//		// TODO: Replace with better call to send the message
+//	}
+//	else if ( !strcmp("og/house/battery/soc/set", message->topic) ) {
+//        // TODO: Needs some validation and range constraints
+//        //printf("Force consumed Ah = %0.2f\r\n", ah_cumulative);
+//        ah_cumulative = -(((100 - atof(message->payload)) / 100) * capacity);
+//	}
 }
 
 void *ProcessStateOfCharge(void *param) {
@@ -478,8 +555,11 @@ void *ProcessStateOfCharge(void *param) {
 
         // >>> MQTT
         payloadlen = sprintf( payload, "%0.1f", state_of_charge ) + 1;
+	    printf(">> <MQTT> %s = %s\r\n", "og/house/battery/soc", payload); fflush(NULL);
 		mosquitto_publish(mqtt, NULL, "og/house/battery/soc", payloadlen, payload, 0, false);
+
         payloadlen = sprintf( payload, "%d", charge_state ) + 1;
+	    printf(">> <MQTT> %s = %s\r\n", "og/house/battery/charge_state", payload); fflush(NULL);
 		mosquitto_publish(mqtt, NULL, "og/house/battery/charge_state", payloadlen, payload, 0, false);
 
         switch(charge_state) {
