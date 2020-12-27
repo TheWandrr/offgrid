@@ -19,6 +19,7 @@
 #include "offgrid_constants.h"
 
 // TODO: Implement control over how much information is output to logs
+// TODO: Make software battery monitor process optional with switch
 
 //const char *argp_program_version = "offgrid-daemon 0.0.1";
 //const char *argp_program_bug_address = "";
@@ -34,33 +35,57 @@ enum ReceiveState {
 };
 
 struct BridgeMap {
-    const unsigned int address;
-    const unsigned int bytes;
+    const unsigned int address; // Ignored if *storage is not NULL
+    const unsigned int bytes; // Ignored if *storage is not NULL
     const char *topic;
     const bool readable;
     const bool writable;
     const char *format; // TODO: Not used at this point
     const double multiplier;
+    double *storage; // Points to an internal storage variable to read/write.
 };
+
+static volatile int running = 1;
+pthread_t process_rx_thread;
+pthread_t process_tx_thread;
+pthread_t process_sunrise;
+pthread_t process_state_of_charge;
+
+double house_battery_amps = 0;
+double house_battery_volts = 0;
+double state_of_charge = 0;
+
+// TODO: This needs to be initialized from persistent storage - database?
+// --OR-- have this calculated in Arduino firmware instead of here
+double ah_cumulative = 0; // Goes negative as battery is discharged
+const int capacity = 198;
+
+const char *mqtt_host = "localhost";
+const unsigned int mqtt_port = 1883;
 
 // Used to translate between memory-mapped variables and MQTT topics
 struct BridgeMap lookup_map[] = {
     // Switches
-    { 0x10, 4, "og/setting/broadcast_period_ms", 1, 1, "%d", (1) },
+    { 0x10, 4, "og/setting/broadcast_period_ms", 1, 1, "%0.0f", 1, NULL },
 
-    // Firmware battery monitor variables
-    { 0x20, 2, "og/batmon/bank0/volts", 1, 0, "%0.2f", 0.01 },
-    { 0x21, 2, "og/batmon/bank0/amps", 1, 0, "%0.1f", 0.1 },
-    { 0x22, 2, "og/batmon/bank0/ah", 1, 1, "%0.1f", 0.1 },
-    { 0x23, 2, "og/batmon/bank0/soc", 1, 1, "%0.1f", 0.01 },
+    // Firmware battery monitor variables (RAM)
+    { 0x20, 2, "og/batmon/bank0/volts", 1, 0, "%0.2f", 0.01, NULL },
+    { 0x21, 2, "og/batmon/bank0/amps", 1, 0, "%0.1f", 0.1, NULL },
+    { 0x22, 2, "og/batmon/bank0/ah", 1, 1, "%0.1f", 0.1, NULL },
+    { 0x23, 2, "og/batmon/bank0/soc", 1, 1, "%0.1f", 0.01, NULL },
 
-//    { 0x28, 2, "og/batmon/bank1/volts", 1, 0, "%0.2f", 0.01 },
-//    { 0x29, 2, "og/batmon/bank1/amps", 1, 0, "%0.1f", 0.1 },
-//    { 0x2A, 2, "og/batmon/bank1/ah", 1, 1, "%0.1f", 0.1 },
-//    { 0x2B, 2, "og/batmon/bank1/soc", 1, 1, "%0.1f", 0.01 },
+    // Firmware battery monitor constants (EEPROM)
+    { 0x24, 4, "og/batmon/bank0/amps_multiplier", 1, 1, "%0.6f", 0.000001, NULL },
+    { 0x25, 4, "og/batmon/bank0/volts_multiplier", 1, 1, "%0.6f", 0.000001, NULL },
+    { 0x26, 2, "og/batmon/bank0/amphours_capacity", 1, 1, "%0.1f", 0.1, NULL },
+
+//    { 0x30, 2, "og/batmon/bank1/volts", 1, 0, "%0.2f", 0.01 },
+//    { 0x31, 2, "og/batmon/bank1/amps", 1, 0, "%0.1f", 0.1 },
+//    { 0x32, 2, "og/batmon/bank1/ah", 1, 1, "%0.1f", 0.1 },
+//    { 0x33, 2, "og/batmon/bank1/soc", 1, 1, "%0.1f", 0.01 },
 
     // PWM outputs
-    { 0xA0, 1, "og/house/light/ceiling", 1, 1, "%d", 1 },
+    { 0xA0, 1, "og/house/light/ceiling", 1, 1, "%0.0f", 1, NULL },
     //{ 0xA1, 1, "", 1, 1, "", (1) },
     //{ 0xA2, 1, "", 1, 1, "", (1) },
     //{ 0xA3, 1, "", 1, 1, "", (1) },
@@ -72,34 +97,23 @@ struct BridgeMap lookup_map[] = {
     //{ 0xA7, 1, "", 1, 1, "", (1) },
 
     // Differential ADC inputs, 75mV shunt ** SIGNED 16 BIT
-    { 0xB0, 2, "og/house/battery/amps", 1, 0, "%0.1f", (0.0000078125 * 500.0 / 0.050 * 1.031) }, // Calibrated at 2.47A
-    { 0xB1, 2, "og/house/fuse_panel/amps", 1, 0, "%0.1f", (0.0000078125 * 50.0 / 0.075) },
-    { 0xB2, 2, "og/house/vehicle_in/amps", 1, 0, "%0.1f", (0.0000078125 * 200.0 / 0.075) },
-    { 0xB3, 2, "og/house/inverter/amps", 1, 0, "%0.1f", (0.0000078125 * 200.0 / 0.075) },
+    { 0xB0, 2, "og/house/battery/amps", 1, 0, "%0.1f", (0.0000078125 * 500.0 / 0.050 * 1.031), NULL }, // Calibrated at 2.47A
+    { 0xB1, 2, "og/house/fuse_panel/amps", 1, 0, "%0.1f", (0.0000078125 * 50.0 / 0.075), NULL },
+    { 0xB2, 2, "og/house/vehicle_in/amps", 1, 0, "%0.1f", (0.0000078125 * 200.0 / 0.075), NULL },
+    { 0xB3, 2, "og/house/inverter/amps", 1, 0, "%0.1f", (0.0000078125 * 200.0 / 0.075), NULL },
 
     // Single ended ADC inputs, 12V
-    { 0xB4, 2, "og/house/battery/volts", 1, 0, "%0.2f", (0.000125 * 4 * 1.05350) }, // Calibrated @ 13.85 V
-    { 0xB5, 2, "og/vehicle/battery/volts", 1, 0, "%0.2f", (0.000125 * 4 * 1.04390) }, // Calibrated at 14.42 V
+    { 0xB4, 2, "og/house/battery/volts", 1, 0, "%0.2f", (0.000125 * 4 * 1.05350), NULL }, // Calibrated @ 13.85 V
+    { 0xB5, 2, "og/vehicle/battery/volts", 1, 0, "%0.2f", (0.000125 * 4 * 1.04390), NULL }, // Calibrated at 14.42 V
     //{ 0xB6, 2, "", 1, 1, "", (1) },
     //{ 0xB7, 2, "", 1, 1, "", (1) },
+
+    // TODO: Refactor this into two different structures, both of which are checked when messages come in.
+    // Software storage only.  No external communication.
+//    { 0, 0, "og/house/battery/soc", 1, 1, "%0.1f", 1, &state_of_charge },
+    { 0, 0, "og/house/battery/ah", 1, 1, "%0.1f", 1, &ah_cumulative },
+
 };
-
-static volatile int running = 1;
-pthread_t process_rx_thread;
-pthread_t process_tx_thread;
-pthread_t process_sunrise;
-pthread_t process_state_of_charge;
-
-double house_battery_amps = 0;
-double house_battery_volts = 0;
-
-// TODO: This needs to be initialized from persistent storage - database?
-// --OR-- have this calculated in Arduino firmware instead of here
-double ah_cumulative = 0; // Goes negative as battery is discharged
-const int capacity = 198;
-
-const char *mqtt_host = "localhost";
-const unsigned int mqtt_port = 1883;
 
 int AddressToTopic(const unsigned int address) {
     int i;
@@ -356,21 +370,21 @@ void ParseMessage(char *msg_buf) {
 
 	case MSG_RETURN_8_8:
 		if(arg_count == 2) {
-			printf(">> <UART> MSG_RETURN_8_8: %0.2X, %0.2X\r\n", (uint8_t)arg[0], (uint8_t)arg[1]); fflush(NULL);
+			printf(">> <UART> MSG_RETURN_8_8: %0.2X, %0.2X\r\n", (uint8_t)arg[0], (int8_t)arg[1]); fflush(NULL);
 			PublishRequestReturn( (uint8_t)arg[0], (int8_t)arg[1] );
 		}
 	break;
 
 	case MSG_RETURN_8_16:
 		if(arg_count == 2) {
-			printf(">> <UART> MSG_RETURN_8_16: %0.2X, %0.4X\r\n", (uint8_t)arg[0], (uint16_t)arg[1]); fflush(NULL);
+			printf(">> <UART> MSG_RETURN_8_16: %0.2X, %0.4X\r\n", (uint8_t)arg[0], (int16_t)arg[1]); fflush(NULL);
 			PublishRequestReturn( (uint8_t)arg[0], (int16_t)arg[1] );
 		}
 	break;
 
 	case MSG_RETURN_8_32:
 		if(arg_count == 2) {
-			printf(">> <UART> MSG_RETURN_8_32: %0.2X, %0.8X\r\n", (uint8_t)arg[0], (uint32_t)arg[1]); fflush(NULL);
+			printf(">> <UART> MSG_RETURN_8_32: %0.2X, %0.8X\r\n", (uint8_t)arg[0], (int32_t)arg[1]); fflush(NULL);
 			PublishRequestReturn( (uint8_t)arg[0], (int32_t)arg[1] );
 		}
 	break;
@@ -403,7 +417,7 @@ void PublishRequestReturn(unsigned int address, long data) {
 
     if( (i = AddressToTopic(address)) >= 0 ) {
         payloadlen = sprintf( payload, lookup_map[i].format, data * lookup_map[i].multiplier ) + 1;
-        //printf("Payload --> %s", payload);
+        printf("Payload --> %s", payload);
         printf("<< <MQTT> %s = %s\r\n", lookup_map[i].topic, payload); fflush(NULL);
 		mosquitto_publish(mqtt, NULL, lookup_map[i].topic, payloadlen, payload, 0, false);
 
@@ -456,33 +470,42 @@ void message_callback(struct mosquitto *mosq, void *obj, const struct mosquitto_
             // Need to know byte length for message from map structure
             // check writable flag before writing
             //printf("SET matched topic: %d, %s\r\n", i, lookup_map[i].topic);
-            if( (lookup_map[i].writable == 1) && (lookup_map[i].bytes > 0) ) {
+            if( ( (lookup_map[i].writable == 1) && (lookup_map[i].bytes > 0) ) ||
+                  (lookup_map[i].writable == 1) && (lookup_map[i].storage != NULL) ) {
 
-                serialPutchar(fd, '\x02');
-
-                switch(lookup_map[i].bytes) {
-
-                    case 1:
-			            printf("<< <UART> MSG_SET_8_8: %0.2X, %0.2X\r\n", (uint8_t)lookup_map[i].address, (uint8_t)(atoi(message->payload))); fflush(NULL);
-		                serialPrintf( fd, "%0.2X:%0.2X,%0.2X", (uint8_t)MSG_SET_8_8, (uint8_t)lookup_map[i].address, (uint8_t)(atoi(message->payload)) );
-                    break;
-
-                    case 2:
-		           		printf("<< <UART> MSG_SET_8_16: %0.2X, %0.4X\r\n", (uint8_t)lookup_map[i].address, (uint16_t)(atoi(message->payload))); fflush(NULL);
-                        serialPrintf( fd, "%0.2X:%0.2X,%0.4X", (uint8_t)MSG_SET_8_16, (uint8_t)lookup_map[i].address, (uint16_t)(atoi(message->payload)) );
-                    break;
-
-//                    case 3:
-//		                serialPrintf( fd, "0.2X:%0.2X,%0.6X", (uint8_t)MSG_SET_8_24, (uint8_t)lookup_map[i].address, (uint32_t)(atoi(message->payload)) );
-//                    break;
-
-                    case 4:
-			            printf("<< <UART> MSG_SET_8_32: %0.2X, %0.8X\r\n", (uint8_t)lookup_map[i].address, (uint32_t)(atoll(message->payload))); fflush(NULL);
-		                serialPrintf( fd, "%0.2X:%0.2X,%0.8X", (uint8_t)MSG_SET_8_32, (uint8_t)lookup_map[i].address, (uint32_t)(atoi(message->payload)) );
-                    break;
+                if(lookup_map[i].storage != NULL) {
+                    //printf("Writing internal variable for '%s'\r\n", topic);
+                    *(lookup_map[i].storage) = atof(message->payload);
                 }
+                else {
 
-                serialPutchar(fd, '\x03');
+                    serialPutchar(fd, '\x02');
+
+                    switch(lookup_map[i].bytes) {
+
+                        case 1:
+			                printf("<< <UART> MSG_SET_8_8: %0.2X, %0.2X\r\n", (uint8_t)lookup_map[i].address, (int8_t)( atof(message->payload) / lookup_map[i].multiplier  ) ); fflush(NULL);
+		                    serialPrintf( fd, "%0.2X:%0.2X,%0.2X", (uint8_t)MSG_SET_8_8, (uint8_t)lookup_map[i].address, (int8_t)( atof(message->payload) / lookup_map[i].multiplier ) );
+                        break;
+
+                        case 2:
+		           		    printf("<< <UART> MSG_SET_8_16: %0.2X, %0.4X\r\n", (uint8_t)lookup_map[i].address, (int16_t)( atof(message->payload) / lookup_map[i].multiplier ) ); fflush(NULL);
+                            serialPrintf( fd, "%0.2X:%0.2X,%0.4X", (uint8_t)MSG_SET_8_16, (uint8_t)lookup_map[i].address, (int16_t)( atof(message->payload) / lookup_map[i].multiplier ) );
+                        break;
+
+//                        case 3:
+//		                      serialPrintf( fd, "0.2X:%0.2X,%0.6X", (uint8_t)MSG_SET_8_24, (uint8_t)lookup_map[i].address, (uint32_t)(atoi(message->payload)) );
+//                        break;
+
+                        case 4:
+			                printf("<< <UART> MSG_SET_8_32: %0.2X, %0.8X\r\n", (uint8_t)lookup_map[i].address, (int32_t)( atof(message->payload) / lookup_map[i].multiplier ) ); fflush(NULL);
+		                    serialPrintf( fd, "%0.2X:%0.2X,%0.8X", (uint8_t)MSG_SET_8_32, (uint8_t)lookup_map[i].address, (int32_t)( atof(message->payload) / lookup_map[i].multiplier ) );
+                        break;
+                    }
+
+                    serialPutchar(fd, '\x03');
+
+                }
             }
         }
     }
@@ -512,7 +535,6 @@ void *ProcessStateOfCharge(void *param) {
     bool sync_pending = false;
     time_t sample_start_time, sample_end_time, sync_pending_begin_time;
     double ah_change = 0;
-    double state_of_charge = 0;
 
     enum ChargeState {
         CS_DISCHARGING,
@@ -557,6 +579,10 @@ void *ProcessStateOfCharge(void *param) {
         payloadlen = sprintf( payload, "%0.1f", state_of_charge ) + 1;
 	    printf(">> <MQTT> %s = %s\r\n", "og/house/battery/soc", payload); fflush(NULL);
 		mosquitto_publish(mqtt, NULL, "og/house/battery/soc", payloadlen, payload, 0, false);
+
+        payloadlen = sprintf( payload, "%0.1f", ah_cumulative ) + 1;
+	    printf(">> <MQTT> %s = %s\r\n", "og/house/battery/ah", payload); fflush(NULL);
+		mosquitto_publish(mqtt, NULL, "og/house/battery/ah", payloadlen, payload, 0, false);
 
         payloadlen = sprintf( payload, "%d", charge_state ) + 1;
 	    printf(">> <MQTT> %s = %s\r\n", "og/house/battery/charge_state", payload); fflush(NULL);
