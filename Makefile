@@ -20,7 +20,7 @@ clean :
 	-rm -f *.o offgrid-daemon
 
 install : all
-	systemctl stop offgrid-daemon
+	-systemctl stop offgrid-daemon
 	chown root:root ./offgrid-daemon.service ./offgrid-daemon
 	chmod 664 ./offgrid-daemon.service
 	cp ./offgrid-daemon.service /etc/systemd/system/
