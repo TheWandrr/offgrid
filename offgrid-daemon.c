@@ -78,6 +78,12 @@ struct BridgeMap lookup_map[] = {
     { 0x24, 4, "og/batmon/bank0/amps_multiplier", 1, 1, "%0.6f", 0.000001, NULL },
     { 0x25, 4, "og/batmon/bank0/volts_multiplier", 1, 1, "%0.6f", 0.000001, NULL },
     { 0x26, 2, "og/batmon/bank0/amphours_capacity", 1, 1, "%0.1f", 0.1, NULL },
+    { 0x27, 2, "og/batmon/bank0/volts_charged", 1, 1, "%0.3f", 0.001, NULL },
+    { 0x28, 2, "og/batmon/bank0/minutes_charged_detection_time", 1, 1, "%0.1f", 0.1, NULL },
+    { 0x29, 4, "og/batmon/bank0/current_threshold", 1, 1, "%0.6f", .000001, NULL },
+    { 0x2A, 1, "og/batmon/bank0/tail_current_factor", 1, 1, "%0.2f", .01, NULL },
+    { 0x2B, 1, "og/batmon/bank0/peukert_factor", 1, 1, "%0.2f", .01, NULL },
+    { 0x2C, 1, "og/batmon/bank0/charge_efficiency_factor", 1, 1, "%0.2f", .01, NULL },
 
 //    { 0x30, 2, "og/batmon/bank1/volts", 1, 0, "%0.2f", 0.01 },
 //    { 0x31, 2, "og/batmon/bank1/amps", 1, 0, "%0.1f", 0.1 },
@@ -370,22 +376,22 @@ void ParseMessage(char *msg_buf) {
 
 	case MSG_RETURN_8_8:
 		if(arg_count == 2) {
-			printf(">> <UART> MSG_RETURN_8_8: %0.2X, %0.2X\r\n", (uint8_t)arg[0], (int8_t)arg[1]); fflush(NULL);
+			printf(">> <UART> MSG_RETURN_8_8: %0.2X, %0.2X\r\n", (uint8_t)arg[0], (uint8_t)arg[1]); fflush(NULL);
 			PublishRequestReturn( (uint8_t)arg[0], (int8_t)arg[1] );
 		}
 	break;
 
 	case MSG_RETURN_8_16:
 		if(arg_count == 2) {
-			printf(">> <UART> MSG_RETURN_8_16: %0.2X, %0.4X\r\n", (uint8_t)arg[0], (int16_t)arg[1]); fflush(NULL);
+			printf(">> <UART> MSG_RETURN_8_16: %0.2X, %0.4X\r\n", (uint8_t)arg[0], (uint16_t)arg[1]); fflush(NULL);
 			PublishRequestReturn( (uint8_t)arg[0], (int16_t)arg[1] );
 		}
 	break;
 
 	case MSG_RETURN_8_32:
 		if(arg_count == 2) {
-			printf(">> <UART> MSG_RETURN_8_32: %0.2X, %0.8X\r\n", (uint8_t)arg[0], (int32_t)arg[1]); fflush(NULL);
-			PublishRequestReturn( (uint8_t)arg[0], (int32_t)arg[1] );
+			printf(">> <UART> MSG_RETURN_8_32: %0.2X, %0.8lX\r\n", (uint8_t)arg[0], (uint32_t)arg[1]); fflush(NULL);
+			PublishRequestReturn( (uint8_t)arg[0], (uint32_t)arg[1] );
 		}
 	break;
     }
@@ -417,7 +423,7 @@ void PublishRequestReturn(unsigned int address, long data) {
 
     if( (i = AddressToTopic(address)) >= 0 ) {
         payloadlen = sprintf( payload, lookup_map[i].format, data * lookup_map[i].multiplier ) + 1;
-        printf("Payload --> %s", payload);
+        //printf("Payload --> %s", payload);
         printf("<< <MQTT> %s = %s\r\n", lookup_map[i].topic, payload); fflush(NULL);
 		mosquitto_publish(mqtt, NULL, lookup_map[i].topic, payloadlen, payload, 0, false);
 
@@ -449,26 +455,27 @@ bool StringHasSuffix(const char *s, const char *suffix) {
 
 void message_callback(struct mosquitto *mosq, void *obj, const struct mosquitto_message *message) {
     int i;
-    char *suffix = "/set";
+    char *suffix_set = "/set"; // Append to a topic to write a value
+    char *suffix_get = "/get"; // Append to a topic to force it to be published immediately
     char topic[255];
     int newlen;
+	char payload[16];
+	int payloadlen;
 
 	printf(">> <MQTT> %s = %s\r\n", message->topic, message->payload); fflush(NULL);
 
     // *** If message ends with "/set", it needs to be handled differently
-    if( StringHasSuffix(message->topic, suffix) ) {
+    if( StringHasSuffix(message->topic, suffix_set) ) {
         //printf("SET message found: %s\r\n", message->topic);
 
         // Strip suffix and try to match
-        newlen = strlen(message->topic) - strlen(suffix);
+        newlen = strlen(message->topic) - strlen(suffix_set);
         newlen = ( (newlen > 254) ? 254 : newlen);
         strncpy(topic, message->topic, newlen);
         topic[newlen] = '\0';
         //printf("Stripped Topic: %s\r\n", topic);
 
         if( (i = TopicToAddress(topic)) >= 0) {
-            // Need to know byte length for message from map structure
-            // check writable flag before writing
             //printf("SET matched topic: %d, %s\r\n", i, lookup_map[i].topic);
             if( ( (lookup_map[i].writable == 1) && (lookup_map[i].bytes > 0) ) ||
                   (lookup_map[i].writable == 1) && (lookup_map[i].storage != NULL) ) {
@@ -484,13 +491,13 @@ void message_callback(struct mosquitto *mosq, void *obj, const struct mosquitto_
                     switch(lookup_map[i].bytes) {
 
                         case 1:
-			                printf("<< <UART> MSG_SET_8_8: %0.2X, %0.2X\r\n", (uint8_t)lookup_map[i].address, (int8_t)( atof(message->payload) / lookup_map[i].multiplier  ) ); fflush(NULL);
-		                    serialPrintf( fd, "%0.2X:%0.2X,%0.2X", (uint8_t)MSG_SET_8_8, (uint8_t)lookup_map[i].address, (int8_t)( atof(message->payload) / lookup_map[i].multiplier ) );
+			                printf("<< <UART> MSG_SET_8_8: %0.2X, %0.2X\r\n", (uint8_t)lookup_map[i].address, (uint8_t)( atof(message->payload) / lookup_map[i].multiplier  ) ); fflush(NULL);
+		                    serialPrintf( fd, "%0.2X:%0.2X,%0.2X", (uint8_t)MSG_SET_8_8, (uint8_t)lookup_map[i].address, (uint8_t)( atof(message->payload) / lookup_map[i].multiplier ) );
                         break;
 
                         case 2:
-		           		    printf("<< <UART> MSG_SET_8_16: %0.2X, %0.4X\r\n", (uint8_t)lookup_map[i].address, (int16_t)( atof(message->payload) / lookup_map[i].multiplier ) ); fflush(NULL);
-                            serialPrintf( fd, "%0.2X:%0.2X,%0.4X", (uint8_t)MSG_SET_8_16, (uint8_t)lookup_map[i].address, (int16_t)( atof(message->payload) / lookup_map[i].multiplier ) );
+		           		    printf("<< <UART> MSG_SET_8_16: %0.2X, %0.4X\r\n", (uint8_t)lookup_map[i].address, (uint16_t)( atof(message->payload) / lookup_map[i].multiplier ) ); fflush(NULL);
+                            serialPrintf( fd, "%0.2X:%0.2X,%0.4X", (uint8_t)MSG_SET_8_16, (uint8_t)lookup_map[i].address, (uint16_t)( atof(message->payload) / lookup_map[i].multiplier ) );
                         break;
 
 //                        case 3:
@@ -498,8 +505,61 @@ void message_callback(struct mosquitto *mosq, void *obj, const struct mosquitto_
 //                        break;
 
                         case 4:
-			                printf("<< <UART> MSG_SET_8_32: %0.2X, %0.8X\r\n", (uint8_t)lookup_map[i].address, (int32_t)( atof(message->payload) / lookup_map[i].multiplier ) ); fflush(NULL);
-		                    serialPrintf( fd, "%0.2X:%0.2X,%0.8X", (uint8_t)MSG_SET_8_32, (uint8_t)lookup_map[i].address, (int32_t)( atof(message->payload) / lookup_map[i].multiplier ) );
+			                printf("<< <UART> MSG_SET_8_32: %0.2X, %0.8lX\r\n", (uint8_t)lookup_map[i].address, (uint32_t)( atof(message->payload) / lookup_map[i].multiplier ) ); fflush(NULL);
+		                    serialPrintf( fd, "%0.2X:%0.2X,%0.8lX", (uint8_t)MSG_SET_8_32, (uint8_t)lookup_map[i].address, (uint32_t)( atof(message->payload) / lookup_map[i].multiplier ) );
+                        break;
+                    }
+
+                    serialPutchar(fd, '\x03');
+
+                }
+            }
+        }
+    }
+    else if( StringHasSuffix(message->topic, suffix_get) ) {
+        //printf("GET message found: %s\r\n", message->topic);
+
+        // Strip suffix and try to match
+        newlen = strlen(message->topic) - strlen(suffix_get);
+        newlen = ( (newlen > 254) ? 254 : newlen);
+        strncpy(topic, message->topic, newlen);
+        topic[newlen] = '\0';
+        //printf("Stripped Topic: %s\r\n", topic);
+
+        if( (i = TopicToAddress(topic)) >= 0) {
+            printf("GET matched topic: %d, %s\r\n", i, lookup_map[i].topic);
+            if( ( (lookup_map[i].readable == 1) && (lookup_map[i].bytes > 0) ) ||
+                  (lookup_map[i].readable == 1) && (lookup_map[i].storage != NULL) ) {
+
+                if(lookup_map[i].storage != NULL) {
+                    printf("Requesting internal variable for '%s'\r\n", topic);
+                    payloadlen = sprintf( payload, lookup_map[i].format, *(lookup_map[i].storage) ) + 1;     
+	                printf(">> <MQTT> %s = %s\r\n", lookup_map[i].topic, payload); fflush(NULL);
+		            mosquitto_publish(mqtt, NULL, lookup_map[i].topic, payloadlen, payload, 0, false);
+                }
+                else {
+
+                    serialPutchar(fd, '\x02');
+
+                    switch(lookup_map[i].bytes) {
+
+                        case 1:
+			                printf("<< <UART> MSG_GET_8_8: %0.2X\r\n", (uint8_t)lookup_map[i].address ); fflush(NULL);
+		                    serialPrintf( fd, "%0.2X:%0.2X", (uint8_t)MSG_GET_8_8, (uint8_t)lookup_map[i].address );
+                        break;
+
+                        case 2:
+		           		    printf("<< <UART> MSG_GET_8_16: %0.2X\r\n", (uint8_t)lookup_map[i].address ); fflush(NULL);
+                            serialPrintf( fd, "%0.2X:%0.2X", (uint8_t)MSG_GET_8_16, (uint8_t)lookup_map[i].address );
+                        break;
+
+//                        case 3:
+//		                      serialPrintf( fd, "0.2X:%0.2X", (uint8_t)MSG_GET_8_24 );
+//                        break;
+
+                        case 4:
+			                printf("<< <UART> MSG_GET_8_32: %0.2X\r\n", (uint8_t)lookup_map[i].address ); fflush(NULL);
+		                    serialPrintf( fd, "%0.2X:%0.2X", (uint8_t)MSG_GET_8_32, (uint8_t)lookup_map[i].address );
                         break;
                     }
 
@@ -574,7 +634,7 @@ void *ProcessStateOfCharge(void *param) {
         // If this hits 100 but the current is still high, we could flag that it's out of sync
         state_of_charge =  ( (capacity + ah_cumulative) / capacity) * 100;
         //if(state_of_charge > 100) state_of_charge = 100; // no min function
-
+/*
         // >>> MQTT
         payloadlen = sprintf( payload, "%0.1f", state_of_charge ) + 1;
 	    printf(">> <MQTT> %s = %s\r\n", "og/house/battery/soc", payload); fflush(NULL);
@@ -587,7 +647,7 @@ void *ProcessStateOfCharge(void *param) {
         payloadlen = sprintf( payload, "%d", charge_state ) + 1;
 	    printf(">> <MQTT> %s = %s\r\n", "og/house/battery/charge_state", payload); fflush(NULL);
 		mosquitto_publish(mqtt, NULL, "og/house/battery/charge_state", payloadlen, payload, 0, false);
-
+*/
         switch(charge_state) {
 
             case CS_CHARGING:
@@ -717,3 +777,5 @@ int main (int argc, char** argv) {
 
 	return (EXIT_SUCCESS);
 }
+
+
