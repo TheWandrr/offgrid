@@ -99,7 +99,7 @@ struct BridgeMap lookup_map[] = {
     //{ 0xA5, 1, "", 1, 1, "", (1) },
 
     // ON/OFF outputs
-    //{ 0xA6, 1, "", 1, 1, "", (1) },
+    { 0xA6, 1, "og/house/light/ceiling_encoder", 1, 1, "%0.0f", 1, NULL },
     //{ 0xA7, 1, "", 1, 1, "", (1) },
 
     // Differential ADC inputs, 75mV shunt ** SIGNED 16 BIT
