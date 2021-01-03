@@ -462,15 +462,71 @@ static int database_callback(void *not_used, int argc, char **argv, char **col_n
 void LogToDatabase(const char *topic, const char *payload) {
     char *err_msg = 0;
     int rc;
-    char *sql = "INSERT INTO message(topic,payload,timestamp) VALUES('%s','%s','%s');";
-    char *stmt;
-    int size;
+    sqlite3_stmt *stmt;
     char now[32];
+    int row_count;
 
     sprintf(now, "%0.6f", timestamp());
 
-    // TODO: Get the most recent message with this topic from the database and only add a new message if it's different than what was found
+    // Query the database for the most recent entry if it matches the current topic and payload
+    //if( sqlite3_prepare_v2(db, "SELECT * FROM message WHERE timestamp=(SELECT max(timestamp) FROM message) AND topic=? AND payload=?;", -1, &stmt, NULL) ) {
+#error "Fix this"
+    if( sqlite3_prepare_v2(db,  "SELECT * FROM message WHERE topic=?1 AND payload=?2 AND timestamp=(SELECT MAX(timestamp) FROM message WHERE topic=?1 and payload=?2);", -1, &stmt, NULL) ) {
+        fprintf(stderr, "Failed to prepare statement: %s\r\n", sqlite3_errmsg(db));
+        return;
+    }
 
+    if( sqlite3_bind_text(stmt, 1, topic, -1, SQLITE_TRANSIENT) ) {
+        fprintf(stderr, "Failed to bind topic: %s\n", sqlite3_errmsg(db));
+        return;
+    }
+
+    if( sqlite3_bind_text(stmt, 2, payload, -1, SQLITE_TRANSIENT) ) {
+        fprintf(stderr, "Failed to bind payload: %s\n", sqlite3_errmsg(db));
+        return;
+    }
+
+    row_count = 0;
+    while( sqlite3_step(stmt) != SQLITE_DONE ) {
+        row_count++;  // Should never exceed 1, but small chance there are two.  We only care about 0 vs !0
+    }
+
+    // If no rows matched, then the most recent DB entry is different than the current so go ahead and add it.
+    if (row_count == 0) {
+
+        if( sqlite3_prepare_v2(db, "INSERT INTO message(topic,payload,timestamp) VALUES(?,?,?);", -1, &stmt, NULL) ) {
+            fprintf(stderr, "Failed to prepare statement: %s\n", sqlite3_errmsg(db));
+            return;
+        }
+
+        rc = sqlite3_bind_text(stmt, 1, topic, -1, SQLITE_TRANSIENT);
+        if(rc != SQLITE_OK) {
+            fprintf(stderr, "Failed to bind topic: %s\n", sqlite3_errmsg(db));
+        }
+
+        rc = sqlite3_bind_text(stmt, 2, payload, -1, SQLITE_TRANSIENT);
+        if(rc != SQLITE_OK) {
+            fprintf(stderr, "Failed to bind payload: %s\n", sqlite3_errmsg(db));
+        }
+
+        rc = sqlite3_bind_text(stmt, 3, now, -1, SQLITE_TRANSIENT);
+        if(rc != SQLITE_OK) {
+            fprintf(stderr, "Failed to bind timestamp: %s\n", sqlite3_errmsg(db));
+        }
+
+    }
+
+    if ( sqlite3_step(stmt) != SQLITE_DONE ) {
+        fprintf(stderr, "Failed to execute statement: %s\n", sqlite3_errmsg(db));
+    }
+
+    sqlite3_finalize(stmt);
+
+
+
+
+
+/*
     size = strlen(sql) + strlen(topic) + strlen(payload) + strlen(now);
 
     stmt = (char *) malloc(size * sizeof(char));
@@ -488,34 +544,6 @@ void LogToDatabase(const char *topic, const char *payload) {
     }
 
     free(stmt);
-
-/*
-    sqlite3_stmt *prepared_stmt;
-    const char *insert_stmt = "INSERT INTO message(topic,payload) VALUES(?,?)";
-    int rc;
-
-    rc = sqlite3_prepare_v2(db, insert_stmt, -1, &prepared_stmt, 0);
-
-    if (rc == SQLITE_OK) {
-        rc = sqlite3_bind_text(prepared_stmt, 1, topic, -1, SQLITE_TRANSIENT);
-        if(rc != SQLITE_OK) {
-            fprintf(stderr, "Failed to bind topic: %s\n", sqlite3_errmsg(db));
-        }
-        rc = sqlite3_bind_text(prepared_stmt, 2, payload, -1, SQLITE_TRANSIENT);
-        if(rc != SQLITE_OK) {
-            fprintf(stderr, "Failed to bind payload: %s\n", sqlite3_errmsg(db));
-        }
-    }
-    else {
-        fprintf(stderr, "Failed to prepare statement: %s\n", sqlite3_errmsg(db));
-    }
-
-    rc = sqlite3_step(prepared_stmt);
-    if (rc != SQLITE_OK) {
-        fprintf(stderr, "Failed to execute statement: %s\n", sqlite3_errmsg(db));
-    }
-
-    sqlite3_finalize(prepared_stmt);
 */
 }
 
