@@ -470,8 +470,8 @@ void LogToDatabase(const char *topic, const char *payload) {
 
     // Query the database for the most recent entry if it matches the current topic and payload
     //if( sqlite3_prepare_v2(db, "SELECT * FROM message WHERE timestamp=(SELECT max(timestamp) FROM message) AND topic=? AND payload=?;", -1, &stmt, NULL) ) {
-#error "Fix this"
-    if( sqlite3_prepare_v2(db,  "SELECT * FROM message WHERE topic=?1 AND payload=?2 AND timestamp=(SELECT MAX(timestamp) FROM message WHERE topic=?1 and payload=?2);", -1, &stmt, NULL) ) {
+    //if( sqlite3_prepare_v2(db,  "SELECT * FROM message WHERE topic=?1 AND payload=?2 AND timestamp=(SELECT MAX(timestamp) FROM message WHERE topic=?1 and payload=?2);", -1, &stmt, NULL) ) {
+    if( sqlite3_prepare_v2(db,  "SELECT * FROM message WHERE topic=?1 AND payload=?2 ORDER BY timestamp DESC LIMIT 1;", -1, &stmt, NULL) ) {
         fprintf(stderr, "Failed to prepare statement: %s\r\n", sqlite3_errmsg(db));
         return;
     }
@@ -491,8 +491,12 @@ void LogToDatabase(const char *topic, const char *payload) {
         row_count++;  // Should never exceed 1, but small chance there are two.  We only care about 0 vs !0
     }
 
+    sqlite3_finalize(stmt);
+
     // If no rows matched, then the most recent DB entry is different than the current so go ahead and add it.
     if (row_count == 0) {
+
+        printf("<< <SQL> INSERT into message(topic, payload, timestamp) VALUES(%s, %s, %s)\r\n", topic, payload, now); fflush(NULL);
 
         if( sqlite3_prepare_v2(db, "INSERT INTO message(topic,payload,timestamp) VALUES(?,?,?);", -1, &stmt, NULL) ) {
             fprintf(stderr, "Failed to prepare statement: %s\n", sqlite3_errmsg(db));
@@ -514,37 +518,16 @@ void LogToDatabase(const char *topic, const char *payload) {
             fprintf(stderr, "Failed to bind timestamp: %s\n", sqlite3_errmsg(db));
         }
 
-    }
+        if ( sqlite3_step(stmt) != SQLITE_DONE ) {
+            fprintf(stderr, "Failed to execute statement: %s\n", sqlite3_errmsg(db));
+        }
 
-    if ( sqlite3_step(stmt) != SQLITE_DONE ) {
-        fprintf(stderr, "Failed to execute statement: %s\n", sqlite3_errmsg(db));
-    }
-
-    sqlite3_finalize(stmt);
-
-
-
-
-
-/*
-    size = strlen(sql) + strlen(topic) + strlen(payload) + strlen(now);
-
-    stmt = (char *) malloc(size * sizeof(char));
-    sprintf(stmt, sql, topic, payload, now);
-
-    printf("<< <SQL> %s\r\n", stmt); fflush(NULL);
-
-    rc = sqlite3_exec(db, stmt, database_callback, 0, &err_msg);
-    if( rc != SQLITE_OK ){
-        fprintf(stderr, "SQL error: %s\n", err_msg);
-        sqlite3_free(err_msg);
+        sqlite3_finalize(stmt);
     }
     else {
-        //fprintf(stdout, "Records created successfully\n");
+        printf("   <SQL> Value not changed since last insertion (%s = %s)\r\n", topic, payload); fflush(NULL);
     }
 
-    free(stmt);
-*/
 }
 
 bool StringHasSuffix(const char *s, const char *suffix) {
