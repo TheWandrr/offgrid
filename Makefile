@@ -1,4 +1,4 @@
-LDFLAGS = -lwiringPi -lpthread -lsystemd -lmosquitto
+LDFLAGS = -lwiringPi -lpthread -lsystemd -lmosquitto -lsqlite3
 
 DB_EXISTS := $(or $(and $(wildcard /usr/local/lib/mqtt.db),1),0)
 

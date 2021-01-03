@@ -12,6 +12,7 @@
 
 #include <systemd/sd-daemon.h>
 
+#include <sqlite3.h>
 #include <mosquitto.h>
 #include <wiringSerial.h>
 //#include <argp.h>
@@ -28,6 +29,10 @@
 
 void ParseMessage(char *msg_buf);
 void PublishRequestReturn(unsigned int address, long data);
+void LogToDatabase(const char *topic, const char *payload);
+
+sqlite3 *db;
+const char *DB_FILENAME = "/usr/local/lib/mqtt.db";
 
 enum ReceiveState {
         GET_STX,
@@ -120,6 +125,13 @@ struct BridgeMap lookup_map[] = {
     { 0, 0, "og/house/battery/ah", 1, 1, "%0.1f", 1, &ah_cumulative },
 
 };
+
+double timestamp(void) {
+    struct timespec spec;
+
+    clock_gettime(CLOCK_REALTIME, &spec);
+    return spec.tv_sec + ( spec.tv_nsec / 1.0e9 );
+}
 
 int AddressToTopic(const unsigned int address) {
     int i;
@@ -427,6 +439,8 @@ void PublishRequestReturn(unsigned int address, long data) {
         printf("<< <MQTT> %s = %s\r\n", lookup_map[i].topic, payload); fflush(NULL);
 		mosquitto_publish(mqtt, NULL, lookup_map[i].topic, payloadlen, payload, 0, false);
 
+        LogToDatabase(lookup_map[i].topic, payload);
+
         // TODO: Need to know if this has stagnated
         if( !strcmp(lookup_map[i].topic, "og/house/battery/amps") ) {
             house_battery_amps = data * lookup_map[i].multiplier;
@@ -435,6 +449,74 @@ void PublishRequestReturn(unsigned int address, long data) {
             house_battery_volts = data * lookup_map[i].multiplier;
         }
     }
+}
+
+static int database_callback(void *not_used, int argc, char **argv, char **col_name) {
+    for (int i = 0; i < argc; i++) {
+        printf("%s = %s\r\n", col_name[i], argv[i] ? argv[i] : "NULL");
+    }
+    printf("\n");
+    return 0;
+}
+
+void LogToDatabase(const char *topic, const char *payload) {
+    char *err_msg = 0;
+    int rc;
+    char *sql = "INSERT INTO message(topic,payload,timestamp) VALUES('%s','%s','%s');";
+    char *stmt;
+    int size;
+    char now[32];
+
+    sprintf(now, "%0.6f", timestamp());
+
+    // TODO: Get the most recent message with this topic from the database and only add a new message if it's different than what was found
+
+    size = strlen(sql) + strlen(topic) + strlen(payload) + strlen(now);
+
+    stmt = (char *) malloc(size * sizeof(char));
+    sprintf(stmt, sql, topic, payload, now);
+
+    printf("<< <SQL> %s\r\n", stmt); fflush(NULL);
+
+    rc = sqlite3_exec(db, stmt, database_callback, 0, &err_msg);
+    if( rc != SQLITE_OK ){
+        fprintf(stderr, "SQL error: %s\n", err_msg);
+        sqlite3_free(err_msg);
+    }
+    else {
+        //fprintf(stdout, "Records created successfully\n");
+    }
+
+    free(stmt);
+
+/*
+    sqlite3_stmt *prepared_stmt;
+    const char *insert_stmt = "INSERT INTO message(topic,payload) VALUES(?,?)";
+    int rc;
+
+    rc = sqlite3_prepare_v2(db, insert_stmt, -1, &prepared_stmt, 0);
+
+    if (rc == SQLITE_OK) {
+        rc = sqlite3_bind_text(prepared_stmt, 1, topic, -1, SQLITE_TRANSIENT);
+        if(rc != SQLITE_OK) {
+            fprintf(stderr, "Failed to bind topic: %s\n", sqlite3_errmsg(db));
+        }
+        rc = sqlite3_bind_text(prepared_stmt, 2, payload, -1, SQLITE_TRANSIENT);
+        if(rc != SQLITE_OK) {
+            fprintf(stderr, "Failed to bind payload: %s\n", sqlite3_errmsg(db));
+        }
+    }
+    else {
+        fprintf(stderr, "Failed to prepare statement: %s\n", sqlite3_errmsg(db));
+    }
+
+    rc = sqlite3_step(prepared_stmt);
+    if (rc != SQLITE_OK) {
+        fprintf(stderr, "Failed to execute statement: %s\n", sqlite3_errmsg(db));
+    }
+
+    sqlite3_finalize(prepared_stmt);
+*/
 }
 
 bool StringHasSuffix(const char *s, const char *suffix) {
@@ -463,6 +545,8 @@ void message_callback(struct mosquitto *mosq, void *obj, const struct mosquitto_
 	int payloadlen;
 
 	printf(">> <MQTT> %s = %s\r\n", message->topic, message->payload); fflush(NULL);
+
+    LogToDatabase(message->topic, message->payload);
 
     // *** If message ends with "/set", it needs to be handled differently
     if( StringHasSuffix(message->topic, suffix_set) ) {
@@ -705,16 +789,26 @@ int main (int argc, char** argv) {
 
 	int status;
 	char client_id[30];
+//    char *err_msg
+    int rc;
 
 	signal(SIGINT, SignalHandler);
 	signal(SIGHUP, SignalHandler);
 	signal(SIGTERM, SignalHandler);
 
+	// SETUP DATABASE
+    rc = sqlite3_open(DB_FILENAME, &db);
+    if (rc != SQLITE_OK) {
+        fprintf (stderr, "Can't open database: %s\n\r", sqlite3_errmsg(db));
+        sqlite3_close(db);
+        return 1;
+    }
+
 	// SETUP UART
-        if ((fd = serialOpen ("/dev/ttyS0", 115200)) < 0) {
-                fprintf (stderr, "Unable to open serial device: %s\n", strerror(errno));
-                return 1;
-        }
+    if ((fd = serialOpen ("/dev/ttyS0", 115200)) < 0) {
+            fprintf (stderr, "Unable to open serial device: %s\n", strerror(errno));
+            return 1;
+    }
 
 	// SETUP MQTT
 	mosquitto_lib_init();
@@ -772,6 +866,8 @@ int main (int argc, char** argv) {
 
 	mosquitto_destroy(mqtt);
 	mosquitto_lib_cleanup();
+
+    sqlite3_close(db);
 
 	// TODO: Any other cleanup actions?
 
