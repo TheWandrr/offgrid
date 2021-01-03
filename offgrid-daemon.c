@@ -374,35 +374,35 @@ void ParseMessage(char *msg_buf) {
 
 	case MSG_KEEP_ALIVE: // Sent by system master (or designate) to ensure bus is operating.  This module will be automatically reset by the watchdog timer if not received in time.
 		if(arg_count == 1) {
-			printf(">> <UART> MSG_KEEP_ALIVE: %0.2X\r\n", (uint8_t)arg[0]); fflush(NULL);
+			//DEBUG//printf(">> <UART> MSG_KEEP_ALIVE: %0.2X\r\n", (uint8_t)arg[0]); fflush(NULL);
 			mosquitto_publish(mqtt, NULL, "og/status/tick", 0, "", 0, false);
-	        printf("<< <MQTT> %s = %s\r\n", "og/status/tick", ""); fflush(NULL);
+	        //DEBUG//printf("<< <MQTT> %s = %s\r\n", "og/status/tick", ""); fflush(NULL);
 		}
 	break;
 
 	case MSG_GET_SET_ERROR:
 		if(arg_count == 1) {
-			printf(">> <UART> MSG_GET_SET_ERROR: %0.2X\r\n", (uint8_t)arg[0]); fflush(NULL);
+			//DEBUG//printf(">> <UART> MSG_GET_SET_ERROR: %0.2X\r\n", (uint8_t)arg[0]); fflush(NULL);
 		}
 	break;
 
 	case MSG_RETURN_8_8:
 		if(arg_count == 2) {
-			printf(">> <UART> MSG_RETURN_8_8: %0.2X, %0.2X\r\n", (uint8_t)arg[0], (uint8_t)arg[1]); fflush(NULL);
+			//DEBUG//printf(">> <UART> MSG_RETURN_8_8: %0.2X, %0.2X\r\n", (uint8_t)arg[0], (uint8_t)arg[1]); fflush(NULL);
 			PublishRequestReturn( (uint8_t)arg[0], (int8_t)arg[1] );
 		}
 	break;
 
 	case MSG_RETURN_8_16:
 		if(arg_count == 2) {
-			printf(">> <UART> MSG_RETURN_8_16: %0.2X, %0.4X\r\n", (uint8_t)arg[0], (uint16_t)arg[1]); fflush(NULL);
+			//DEBUG//printf(">> <UART> MSG_RETURN_8_16: %0.2X, %0.4X\r\n", (uint8_t)arg[0], (uint16_t)arg[1]); fflush(NULL);
 			PublishRequestReturn( (uint8_t)arg[0], (int16_t)arg[1] );
 		}
 	break;
 
 	case MSG_RETURN_8_32:
 		if(arg_count == 2) {
-			printf(">> <UART> MSG_RETURN_8_32: %0.2X, %0.8lX\r\n", (uint8_t)arg[0], (uint32_t)arg[1]); fflush(NULL);
+			//DEBUG//printf(">> <UART> MSG_RETURN_8_32: %0.2X, %0.8lX\r\n", (uint8_t)arg[0], (uint32_t)arg[1]); fflush(NULL);
 			PublishRequestReturn( (uint8_t)arg[0], (uint32_t)arg[1] );
 		}
 	break;
@@ -435,8 +435,7 @@ void PublishRequestReturn(unsigned int address, long data) {
 
     if( (i = AddressToTopic(address)) >= 0 ) {
         payloadlen = sprintf( payload, lookup_map[i].format, data * lookup_map[i].multiplier ) + 1;
-        //printf("Payload --> %s", payload);
-        printf("<< <MQTT> %s = %s\r\n", lookup_map[i].topic, payload); fflush(NULL);
+        //DEBUG//printf("<< <MQTT> %s = %s\r\n", lookup_map[i].topic, payload); fflush(NULL);
 		mosquitto_publish(mqtt, NULL, lookup_map[i].topic, payloadlen, payload, 0, false);
 
         LogToDatabase(lookup_map[i].topic, payload);
@@ -451,13 +450,13 @@ void PublishRequestReturn(unsigned int address, long data) {
     }
 }
 
-static int database_callback(void *not_used, int argc, char **argv, char **col_name) {
-    for (int i = 0; i < argc; i++) {
-        printf("%s = %s\r\n", col_name[i], argv[i] ? argv[i] : "NULL");
-    }
-    printf("\n");
-    return 0;
-}
+//static int database_callback(void *not_used, int argc, char **argv, char **col_name) {
+//    for (int i = 0; i < argc; i++) {
+//        printf("%s = %s\r\n", col_name[i], argv[i] ? argv[i] : "NULL");
+//    }
+//    printf("\n");
+//    return 0;
+//}
 
 void LogToDatabase(const char *topic, const char *payload) {
     char *err_msg = 0;
@@ -496,7 +495,7 @@ void LogToDatabase(const char *topic, const char *payload) {
     // If no rows matched, then the most recent DB entry is different than the current so go ahead and add it.
     if (row_count == 0) {
 
-        printf("<< <SQL> INSERT into message(topic, payload, timestamp) VALUES(%s, %s, %s)\r\n", topic, payload, now); fflush(NULL);
+        //DEBUG//printf("<< <SQL> INSERT into message(topic, payload, timestamp) VALUES(%s, %s, %s)\r\n", topic, payload, now); fflush(NULL);
 
         if( sqlite3_prepare_v2(db, "INSERT INTO message(topic,payload,timestamp) VALUES(?,?,?);", -1, &stmt, NULL) ) {
             fprintf(stderr, "Failed to prepare statement: %s\n", sqlite3_errmsg(db));
@@ -525,7 +524,7 @@ void LogToDatabase(const char *topic, const char *payload) {
         sqlite3_finalize(stmt);
     }
     else {
-        printf("   <SQL> Value not changed since last insertion (%s = %s)\r\n", topic, payload); fflush(NULL);
+        //DEBUG//printf("   <SQL> Value not changed since last insertion (%s = %s)\r\n", topic, payload); fflush(NULL);
     }
 
 }
@@ -555,7 +554,7 @@ void message_callback(struct mosquitto *mosq, void *obj, const struct mosquitto_
 	char payload[16];
 	int payloadlen;
 
-	printf(">> <MQTT> %s = %s\r\n", message->topic, message->payload); fflush(NULL);
+	//DEBUG//printf(">> <MQTT> %s = %s\r\n", message->topic, message->payload); fflush(NULL);
 
     LogToDatabase(message->topic, message->payload);
 
@@ -586,12 +585,12 @@ void message_callback(struct mosquitto *mosq, void *obj, const struct mosquitto_
                     switch(lookup_map[i].bytes) {
 
                         case 1:
-			                printf("<< <UART> MSG_SET_8_8: %0.2X, %0.2X\r\n", (uint8_t)lookup_map[i].address, (uint8_t)( atof(message->payload) / lookup_map[i].multiplier  ) ); fflush(NULL);
+			                //DEBUG//printf("<< <UART> MSG_SET_8_8: %0.2X, %0.2X\r\n", (uint8_t)lookup_map[i].address, (uint8_t)( atof(message->payload) / lookup_map[i].multiplier  ) ); fflush(NULL);
 		                    serialPrintf( fd, "%0.2X:%0.2X,%0.2X", (uint8_t)MSG_SET_8_8, (uint8_t)lookup_map[i].address, (uint8_t)( atof(message->payload) / lookup_map[i].multiplier ) );
                         break;
 
                         case 2:
-		           		    printf("<< <UART> MSG_SET_8_16: %0.2X, %0.4X\r\n", (uint8_t)lookup_map[i].address, (uint16_t)( atof(message->payload) / lookup_map[i].multiplier ) ); fflush(NULL);
+		           		    //DEBUG//printf("<< <UART> MSG_SET_8_16: %0.2X, %0.4X\r\n", (uint8_t)lookup_map[i].address, (uint16_t)( atof(message->payload) / lookup_map[i].multiplier ) ); fflush(NULL);
                             serialPrintf( fd, "%0.2X:%0.2X,%0.4X", (uint8_t)MSG_SET_8_16, (uint8_t)lookup_map[i].address, (uint16_t)( atof(message->payload) / lookup_map[i].multiplier ) );
                         break;
 
@@ -600,7 +599,7 @@ void message_callback(struct mosquitto *mosq, void *obj, const struct mosquitto_
 //                        break;
 
                         case 4:
-			                printf("<< <UART> MSG_SET_8_32: %0.2X, %0.8lX\r\n", (uint8_t)lookup_map[i].address, (uint32_t)( atof(message->payload) / lookup_map[i].multiplier ) ); fflush(NULL);
+			                //DEBUG//printf("<< <UART> MSG_SET_8_32: %0.2X, %0.8lX\r\n", (uint8_t)lookup_map[i].address, (uint32_t)( atof(message->payload) / lookup_map[i].multiplier ) ); fflush(NULL);
 		                    serialPrintf( fd, "%0.2X:%0.2X,%0.8lX", (uint8_t)MSG_SET_8_32, (uint8_t)lookup_map[i].address, (uint32_t)( atof(message->payload) / lookup_map[i].multiplier ) );
                         break;
                     }
@@ -622,14 +621,14 @@ void message_callback(struct mosquitto *mosq, void *obj, const struct mosquitto_
         //printf("Stripped Topic: %s\r\n", topic);
 
         if( (i = TopicToAddress(topic)) >= 0) {
-            printf("GET matched topic: %d, %s\r\n", i, lookup_map[i].topic);
+            //DEBUG//printf("GET matched topic: %d, %s\r\n", i, lookup_map[i].topic);
             if( ( (lookup_map[i].readable == 1) && (lookup_map[i].bytes > 0) ) ||
                   (lookup_map[i].readable == 1) && (lookup_map[i].storage != NULL) ) {
 
                 if(lookup_map[i].storage != NULL) {
-                    printf("Requesting internal variable for '%s'\r\n", topic);
+                    //DEBUG//printf("Requesting internal variable for '%s'\r\n", topic);
                     payloadlen = sprintf( payload, lookup_map[i].format, *(lookup_map[i].storage) ) + 1;     
-	                printf(">> <MQTT> %s = %s\r\n", lookup_map[i].topic, payload); fflush(NULL);
+	                //DEBUG//printf(">> <MQTT> %s = %s\r\n", lookup_map[i].topic, payload); fflush(NULL);
 		            mosquitto_publish(mqtt, NULL, lookup_map[i].topic, payloadlen, payload, 0, false);
                 }
                 else {
@@ -639,12 +638,12 @@ void message_callback(struct mosquitto *mosq, void *obj, const struct mosquitto_
                     switch(lookup_map[i].bytes) {
 
                         case 1:
-			                printf("<< <UART> MSG_GET_8_8: %0.2X\r\n", (uint8_t)lookup_map[i].address ); fflush(NULL);
+			                //DEBUG//printf("<< <UART> MSG_GET_8_8: %0.2X\r\n", (uint8_t)lookup_map[i].address ); fflush(NULL);
 		                    serialPrintf( fd, "%0.2X:%0.2X", (uint8_t)MSG_GET_8_8, (uint8_t)lookup_map[i].address );
                         break;
 
                         case 2:
-		           		    printf("<< <UART> MSG_GET_8_16: %0.2X\r\n", (uint8_t)lookup_map[i].address ); fflush(NULL);
+		           		    //DEBUG//printf("<< <UART> MSG_GET_8_16: %0.2X\r\n", (uint8_t)lookup_map[i].address ); fflush(NULL);
                             serialPrintf( fd, "%0.2X:%0.2X", (uint8_t)MSG_GET_8_16, (uint8_t)lookup_map[i].address );
                         break;
 
@@ -653,7 +652,7 @@ void message_callback(struct mosquitto *mosq, void *obj, const struct mosquitto_
 //                        break;
 
                         case 4:
-			                printf("<< <UART> MSG_GET_8_32: %0.2X\r\n", (uint8_t)lookup_map[i].address ); fflush(NULL);
+			                //DEBUG//printf("<< <UART> MSG_GET_8_32: %0.2X\r\n", (uint8_t)lookup_map[i].address ); fflush(NULL);
 		                    serialPrintf( fd, "%0.2X:%0.2X", (uint8_t)MSG_GET_8_32, (uint8_t)lookup_map[i].address );
                         break;
                     }
