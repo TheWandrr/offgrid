@@ -467,7 +467,7 @@ void LogToDatabase(const char *topic, const char *payload) {
     int row_count;
 
     sprintf(now, "%0.6f", timestamp());
-
+/*
     // Query the database for the most recent entry if it matches the current topic and payload
     if( sqlite3_prepare_v2(db,  "SELECT * FROM message WHERE topic=?1 AND payload=?2 ORDER BY timestamp DESC LIMIT 1;", -1, &stmt, NULL) ) {
         fprintf(stderr, "Failed to prepare statement: %s\r\n", sqlite3_errmsg(db));
@@ -490,9 +490,22 @@ void LogToDatabase(const char *topic, const char *payload) {
     }
 
     sqlite3_finalize(stmt);
-
+*/
     // If no rows matched, then the most recent DB entry is different than the current so go ahead and add it.
-    if (row_count == 0) {
+//    if (row_count == 0) {
+
+
+//---------------------------------------
+//---------------------------------------
+// Upon insertion to database, also store the topic/payload internally.  Before insertion, compare 
+// to previous and only insert if payload for topic has changed by a certain amount (or a certain amount of time has passed?)
+//
+//    Maybe use 'storage' in BridgeMap?
+//---------------------------------------
+//---------------------------------------
+
+
+    if (1) {
 
         if( sqlite3_prepare_v2(db, "INSERT INTO message(topic,payload,timestamp) VALUES(?,?,?);", -1, &stmt, NULL) ) {
             fprintf(stderr, "Failed to prepare statement: %s\n", sqlite3_errmsg(db));
@@ -842,25 +855,26 @@ int main (int argc, char** argv) {
 		sd_notify(0, "WATCHDOG=1");
 	}
 
-	printf("Waiting for threads to terminate...\r\n");
-	fflush(NULL);
 
+    // CLEANUP CODE ONLY BEYOND THIS POINT
+
+	printf("Waiting for threads to terminate...\r\n"); fflush(NULL);
 	pthread_join(process_rx_thread, NULL);
 	pthread_join(process_tx_thread, NULL);
     pthread_join(process_sunrise, NULL);
     pthread_join(process_state_of_charge, NULL);
+	printf("...threads terminated\r\n"); fflush(NULL);
 
-	printf("...Threads terminated\r\n");
-	fflush(NULL);
-
+    printf("Stopping mosquitto client...\r\n"); fflush(NULL);
 	mosquitto_loop_stop(mqtt, true);
-
 	mosquitto_destroy(mqtt);
 	mosquitto_lib_cleanup();
+    printf("...mosquitto client stopped\r\n"); fflush(NULL);
 
+    printf("Terminating database connection...\r\n"); fflush(NULL);
     sqlite3_close(db);
-
-	// TODO: Any other cleanup actions?
+    sqlite3_shutdown();
+    printf("...database connection terminated\r\n"); fflush(NULL);
 
 	return (EXIT_SUCCESS);
 }
