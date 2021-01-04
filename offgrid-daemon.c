@@ -791,10 +791,7 @@ void *ProcessSunrise(void *param) {
 }
 
 int main (int argc, char** argv) {
-
-	int status;
 	char client_id[30];
-//    char *err_msg
     int rc;
 
 	signal(SIGINT, SignalHandler);
@@ -820,7 +817,6 @@ int main (int argc, char** argv) {
 	snprintf(client_id, sizeof(client_id)-1, "offgrid-daemon-%d", getpid());
 
 	if( (mqtt = mosquitto_new(client_id, true, NULL)) != NULL ) { // TODO: Replace NULL with pointer to data structure that will be passed to callbacks
-		//mosquitto_connect_callback_set(mqtt, connect_callback);
 		mosquitto_message_callback_set(mqtt, message_callback);
 
 		if( (mosquitto_connect(mqtt, mqtt_host, mqtt_port, 15)) == MOSQ_ERR_SUCCESS ) {
@@ -849,17 +845,11 @@ int main (int argc, char** argv) {
     pthread_create(&process_sunrise, NULL, ProcessSunrise, NULL);
     pthread_create(&process_state_of_charge, NULL, ProcessStateOfCharge, NULL);
 
-	sd_notify (0, "READY=1"); // Tell systemd we're ready
+	sd_notify (0, "READY=1");
 
 	while(running) {
-
-		if(running && status) {
-			mosquitto_reconnect(mqtt);
-		}
-
 		sleep(5);
-		sd_notify(0, "WATCHDOG=1"); // Tells systemd to reset it's watchdog timer
-
+		sd_notify(0, "WATCHDOG=1");
 	}
 
 	printf("Waiting for threads to terminate...\r\n");
