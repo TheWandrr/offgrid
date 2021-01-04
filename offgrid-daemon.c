@@ -374,9 +374,9 @@ void ParseMessage(char *msg_buf) {
 
 	case MSG_KEEP_ALIVE: // Sent by system master (or designate) to ensure bus is operating.  This module will be automatically reset by the watchdog timer if not received in time.
 		if(arg_count == 1) {
-			printf(">> <UART> MSG_KEEP_ALIVE: %0.2X\r\n", (uint8_t)arg[0]); fflush(NULL);
+			//DEBUG//printf(">> <UART> MSG_KEEP_ALIVE: %0.2X\r\n", (uint8_t)arg[0]); fflush(NULL);
 			mosquitto_publish(mqtt, NULL, "og/status/tick", 0, "", 0, false);
-	        printf("<< <MQTT> %s = %s\r\n", "og/status/tick", ""); fflush(NULL);
+	        //DEBUG//printf("<< <MQTT> %s = %s\r\n", "og/status/tick", ""); fflush(NULL);
 		}
 	break;
 
@@ -388,21 +388,21 @@ void ParseMessage(char *msg_buf) {
 
 	case MSG_RETURN_8_8:
 		if(arg_count == 2) {
-			printf(">> <UART> MSG_RETURN_8_8: %0.2X, %0.2X\r\n", (uint8_t)arg[0], (uint8_t)arg[1]); fflush(NULL);
+			//DEBUG//printf(">> <UART> MSG_RETURN_8_8: %0.2X, %0.2X\r\n", (uint8_t)arg[0], (uint8_t)arg[1]); fflush(NULL);
 			PublishRequestReturn( (uint8_t)arg[0], (int8_t)arg[1] );
 		}
 	break;
 
 	case MSG_RETURN_8_16:
 		if(arg_count == 2) {
-			printf(">> <UART> MSG_RETURN_8_16: %0.2X, %0.4X\r\n", (uint8_t)arg[0], (uint16_t)arg[1]); fflush(NULL);
+			//DEBUG//printf(">> <UART> MSG_RETURN_8_16: %0.2X, %0.4X\r\n", (uint8_t)arg[0], (uint16_t)arg[1]); fflush(NULL);
 			PublishRequestReturn( (uint8_t)arg[0], (int16_t)arg[1] );
 		}
 	break;
 
 	case MSG_RETURN_8_32:
 		if(arg_count == 2) {
-			printf(">> <UART> MSG_RETURN_8_32: %0.2X, %0.8lX\r\n", (uint8_t)arg[0], (uint32_t)arg[1]); fflush(NULL);
+			//DEBUG//printf(">> <UART> MSG_RETURN_8_32: %0.2X, %0.8lX\r\n", (uint8_t)arg[0], (uint32_t)arg[1]); fflush(NULL);
 			PublishRequestReturn( (uint8_t)arg[0], (uint32_t)arg[1] );
 		}
 	break;
@@ -435,8 +435,7 @@ void PublishRequestReturn(unsigned int address, long data) {
 
     if( (i = AddressToTopic(address)) >= 0 ) {
         payloadlen = sprintf( payload, lookup_map[i].format, data * lookup_map[i].multiplier ) + 1;
-        //printf("Payload --> %s", payload);
-        printf("<< <MQTT> %s = %s\r\n", lookup_map[i].topic, payload); fflush(NULL);
+        //DEBUG//printf("<< <MQTT> %s = %s\r\n", lookup_map[i].topic, payload); fflush(NULL);
 		mosquitto_publish(mqtt, NULL, lookup_map[i].topic, payloadlen, payload, 0, false);
 
         LogToDatabase(lookup_map[i].topic, payload);
@@ -451,13 +450,14 @@ void PublishRequestReturn(unsigned int address, long data) {
     }
 }
 
-static int database_callback(void *not_used, int argc, char **argv, char **col_name) {
-    for (int i = 0; i < argc; i++) {
-        printf("%s = %s\r\n", col_name[i], argv[i] ? argv[i] : "NULL");
-    }
-    printf("\n");
-    return 0;
-}
+// Not used right now but maybe in the future
+//static int database_callback(void *not_used, int argc, char **argv, char **col_name) {
+//    for (int i = 0; i < argc; i++) {
+//        printf("%s = %s\r\n", col_name[i], argv[i] ? argv[i] : "NULL");
+//    }
+//    printf("\n");
+//    return 0;
+//}
 
 void LogToDatabase(const char *topic, const char *payload) {
     char *err_msg = 0;
@@ -469,8 +469,6 @@ void LogToDatabase(const char *topic, const char *payload) {
     sprintf(now, "%0.6f", timestamp());
 
     // Query the database for the most recent entry if it matches the current topic and payload
-    //if( sqlite3_prepare_v2(db, "SELECT * FROM message WHERE timestamp=(SELECT max(timestamp) FROM message) AND topic=? AND payload=?;", -1, &stmt, NULL) ) {
-    //if( sqlite3_prepare_v2(db,  "SELECT * FROM message WHERE topic=?1 AND payload=?2 AND timestamp=(SELECT MAX(timestamp) FROM message WHERE topic=?1 and payload=?2);", -1, &stmt, NULL) ) {
     if( sqlite3_prepare_v2(db,  "SELECT * FROM message WHERE topic=?1 AND payload=?2 ORDER BY timestamp DESC LIMIT 1;", -1, &stmt, NULL) ) {
         fprintf(stderr, "Failed to prepare statement: %s\r\n", sqlite3_errmsg(db));
         return;
@@ -549,9 +547,7 @@ void message_callback(struct mosquitto *mosq, void *obj, const struct mosquitto_
 	char payload[16];
 	int payloadlen;
 
-	printf(">> <MQTT> %s = %s\r\n", message->topic, message->payload); fflush(NULL);
-
-    LogToDatabase(message->topic, message->payload);
+	//DEBUG//printf(">> <MQTT> %s = %s\r\n", message->topic, message->payload); fflush(NULL);
 
     // *** If message ends with "/set", it needs to be handled differently
     if( StringHasSuffix(message->topic, suffix_set) ) {
@@ -659,16 +655,10 @@ void message_callback(struct mosquitto *mosq, void *obj, const struct mosquitto_
         }
     }
     else {
+        // Log everything except /get and /set, which are handled as special cases
+        LogToDatabase(message->topic, message->payload);
     }
 
-//	if ( !strcmp("og/house/light/ceiling/set", message->topic) ) {
-//		// TODO: Replace with better call to send the message
-//	}
-//	else if ( !strcmp("og/house/battery/soc/set", message->topic) ) {
-//        // TODO: Needs some validation and range constraints
-//        //printf("Force consumed Ah = %0.2f\r\n", ah_cumulative);
-//        ah_cumulative = -(((100 - atof(message->payload)) / 100) * capacity);
-//	}
 }
 
 void *ProcessStateOfCharge(void *param) {
