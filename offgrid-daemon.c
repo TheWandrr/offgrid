@@ -29,7 +29,7 @@
 
 void ParseMessage(char *msg_buf);
 void PublishRequestReturn(unsigned int address, long data);
-void LogToDatabase(const char *topic, const char *payload);
+void LogToDatabase(const char *topic, const long data, const double now);
 
 sqlite3 *db;
 const char *DB_FILENAME = "/usr/local/lib/mqtt.db";
@@ -39,22 +39,26 @@ enum ReceiveState {
         GET_DATA,
 };
 
+const int ADDR_INTERNAL_ONLY = -1;
+
+// Only used for memory mapped data from UART-connected hardware
 struct BridgeMap {
-    const unsigned int address; // Ignored if *storage is not NULL
-    const unsigned int bytes; // Ignored if *storage is not NULL
+    const int address;
+    const unsigned int bytes;
     const char *topic;
     const bool readable;
     const bool writable;
-    const char *format; // TODO: Not used at this point
+    const char *format;
     const double multiplier;
-    double *storage; // Points to an internal storage variable to read/write.
+    long data;
+    double data_timestamp;
 };
 
 static volatile int running = 1;
 pthread_t process_rx_thread;
 pthread_t process_tx_thread;
 pthread_t process_sunrise;
-pthread_t process_state_of_charge;
+//pthread_t process_state_of_charge;
 
 double house_battery_amps = 0;
 double house_battery_volts = 0;
@@ -62,33 +66,35 @@ double state_of_charge = 0;
 
 // TODO: This needs to be initialized from persistent storage - database?
 // --OR-- have this calculated in Arduino firmware instead of here
-double ah_cumulative = 0; // Goes negative as battery is discharged
+// Replaced with data storate in BridgeMap
+//double ah_cumulative = 0; // Goes negative as battery is discharged
 const int capacity = 198;
 
 const char *mqtt_host = "localhost";
 const unsigned int mqtt_port = 1883;
 
-// Used to translate between memory-mapped variables and MQTT topics
+// Used to translate between UART-connected hardware memory-mapped variables and MQTT topics
+// Fixed point data is shifted into an integer value for serial transmission, database storage, and most recent cached value
 struct BridgeMap lookup_map[] = {
     // Switches
-    { 0x10, 4, "og/setting/broadcast_period_ms", 1, 1, "%0.0f", 1, NULL },
+    { 0x10, 4, "og/setting/broadcast_period_ms", 1, 1, "%0.0f", 1, 0, 0 },
 
     // Firmware battery monitor variables (RAM)
-    { 0x20, 2, "og/batmon/bank0/volts", 1, 0, "%0.2f", 0.01, NULL },
-    { 0x21, 2, "og/batmon/bank0/amps", 1, 0, "%0.1f", 0.1, NULL },
-    { 0x22, 2, "og/batmon/bank0/ah", 1, 1, "%0.1f", 0.1, NULL },
-    { 0x23, 2, "og/batmon/bank0/soc", 1, 1, "%0.1f", 0.01, NULL },
+    { 0x20, 2, "og/batmon/bank0/volts", 1, 0, "%0.2f", 0.01, 0, 0 },
+    { 0x21, 2, "og/batmon/bank0/amps", 1, 0, "%0.1f", 0.1, 0, 0 },
+    { 0x22, 2, "og/batmon/bank0/ah", 1, 1, "%0.1f", 0.1, 0, 0 },
+    { 0x23, 2, "og/batmon/bank0/soc", 1, 1, "%0.1f", 0.01, 0, 0 },
 
     // Firmware battery monitor constants (EEPROM)
-    { 0x24, 4, "og/batmon/bank0/amps_multiplier", 1, 1, "%0.6f", 0.000001, NULL },
-    { 0x25, 4, "og/batmon/bank0/volts_multiplier", 1, 1, "%0.6f", 0.000001, NULL },
-    { 0x26, 2, "og/batmon/bank0/amphours_capacity", 1, 1, "%0.1f", 0.1, NULL },
-    { 0x27, 2, "og/batmon/bank0/volts_charged", 1, 1, "%0.3f", 0.001, NULL },
-    { 0x28, 2, "og/batmon/bank0/minutes_charged_detection_time", 1, 1, "%0.1f", 0.1, NULL },
-    { 0x29, 4, "og/batmon/bank0/current_threshold", 1, 1, "%0.6f", .000001, NULL },
-    { 0x2A, 1, "og/batmon/bank0/tail_current_factor", 1, 1, "%0.2f", .01, NULL },
-    { 0x2B, 1, "og/batmon/bank0/peukert_factor", 1, 1, "%0.2f", .01, NULL },
-    { 0x2C, 1, "og/batmon/bank0/charge_efficiency_factor", 1, 1, "%0.2f", .01, NULL },
+    { 0x24, 4, "og/batmon/bank0/amps_multiplier", 1, 1, "%0.6f", 0.000001, 0, 0 },
+    { 0x25, 4, "og/batmon/bank0/volts_multiplier", 1, 1, "%0.6f", 0.000001, 0, 0 },
+    { 0x26, 2, "og/batmon/bank0/amphours_capacity", 1, 1, "%0.1f", 0.1, 0, 0 },
+    { 0x27, 2, "og/batmon/bank0/volts_charged", 1, 1, "%0.3f", 0.001, 0, 0 },
+    { 0x28, 2, "og/batmon/bank0/minutes_charged_detection_time", 1, 1, "%0.1f", 0.1, 0, 0 },
+    { 0x29, 4, "og/batmon/bank0/current_threshold", 1, 1, "%0.6f", .000001, 0, 0 },
+    { 0x2A, 1, "og/batmon/bank0/tail_current_factor", 1, 1, "%0.2f", .01, 0, 0 },
+    { 0x2B, 1, "og/batmon/bank0/peukert_factor", 1, 1, "%0.2f", .01, 0, 0 },
+    { 0x2C, 1, "og/batmon/bank0/charge_efficiency_factor", 1, 1, "%0.2f", .01, 0, 0 },
 
 //    { 0x30, 2, "og/batmon/bank1/volts", 1, 0, "%0.2f", 0.01 },
 //    { 0x31, 2, "og/batmon/bank1/amps", 1, 0, "%0.1f", 0.1 },
@@ -96,7 +102,7 @@ struct BridgeMap lookup_map[] = {
 //    { 0x33, 2, "og/batmon/bank1/soc", 1, 1, "%0.1f", 0.01 },
 
     // PWM outputs
-    { 0xA0, 1, "og/house/light/ceiling", 1, 1, "%0.0f", 1, NULL },
+    { 0xA0, 1, "og/house/light/ceiling", 1, 1, "%0.0f", 1, 0, 0 },
     //{ 0xA1, 1, "", 1, 1, "", (1) },
     //{ 0xA2, 1, "", 1, 1, "", (1) },
     //{ 0xA3, 1, "", 1, 1, "", (1) },
@@ -104,26 +110,21 @@ struct BridgeMap lookup_map[] = {
     //{ 0xA5, 1, "", 1, 1, "", (1) },
 
     // ON/OFF outputs
-    { 0xA6, 1, "og/house/light/ceiling_encoder", 1, 1, "%0.0f", 1, NULL },
+    { 0xA6, 1, "og/house/light/ceiling_encoder", 1, 1, "%0.0f", 1, 0, 0 },
     //{ 0xA7, 1, "", 1, 1, "", (1) },
 
     // Differential ADC inputs, 75mV shunt ** SIGNED 16 BIT
-    { 0xB0, 2, "og/house/battery/amps", 1, 0, "%0.1f", (0.0000078125 * 500.0 / 0.050 * 1.031), NULL }, // Calibrated at 2.47A
-    { 0xB1, 2, "og/house/fuse_panel/amps", 1, 0, "%0.1f", (0.0000078125 * 50.0 / 0.075), NULL },
-    { 0xB2, 2, "og/house/vehicle_in/amps", 1, 0, "%0.1f", (0.0000078125 * 200.0 / 0.075), NULL },
-    { 0xB3, 2, "og/house/inverter/amps", 1, 0, "%0.1f", (0.0000078125 * 200.0 / 0.075), NULL },
+    { 0xB0, 2, "og/house/battery/amps", 1, 0, "%0.1f", (0.0000078125 * 500.0 / 0.050 * 1.031), 0, 0 }, // Calibrated at 2.47A
+    { 0xB1, 2, "og/house/fuse_panel/amps", 1, 0, "%0.1f", (0.0000078125 * 50.0 / 0.075), 0, 0 },
+    { 0xB2, 2, "og/house/vehicle_in/amps", 1, 0, "%0.1f", (0.0000078125 * 200.0 / 0.075), 0, 0 },
+    { 0xB3, 2, "og/house/inverter/amps", 1, 0, "%0.1f", (0.0000078125 * 200.0 / 0.075), 0, 0 },
 
     // Single ended ADC inputs, 12V
-    { 0xB4, 2, "og/house/battery/volts", 1, 0, "%0.2f", (0.000125 * 4 * 1.05350), NULL }, // Calibrated @ 13.85 V
-    { 0xB5, 2, "og/vehicle/battery/volts", 1, 0, "%0.2f", (0.000125 * 4 * 1.04390), NULL }, // Calibrated at 14.42 V
+    // !! RAW values no longer used !!
+//    { 0xB4, 2, "og/house/battery/volts", 1, 0, "%0.2f", (0.000125 * 4 * 1.05350), 0, 0 }, // Calibrated @ 13.85 V
+//    { 0xB5, 2, "og/vehicle/battery/volts", 1, 0, "%0.2f", (0.000125 * 4 * 1.04390), 0, 0 }, // Calibrated at 14.42 V
     //{ 0xB6, 2, "", 1, 1, "", (1) },
     //{ 0xB7, 2, "", 1, 1, "", (1) },
-
-    // TODO: Refactor this into two different structures, both of which are checked when messages come in.
-    // Software storage only.  No external communication.
-//    { 0, 0, "og/house/battery/soc", 1, 1, "%0.1f", 1, &state_of_charge },
-    { 0, 0, "og/house/battery/ah", 1, 1, "%0.1f", 1, &ah_cumulative },
-
 };
 
 double timestamp(void) {
@@ -431,22 +432,30 @@ void *ProcessTransmitThread(void *param) {
 void PublishRequestReturn(unsigned int address, long data) {
 	char payload[256];
 	int payloadlen;
+    double now;
     int i;
 
     if( (i = AddressToTopic(address)) >= 0 ) {
+        now = timestamp();
         payloadlen = sprintf( payload, lookup_map[i].format, data * lookup_map[i].multiplier ) + 1;
         //DEBUG//printf("<< <MQTT> %s = %s\r\n", lookup_map[i].topic, payload); fflush(NULL);
-		mosquitto_publish(mqtt, NULL, lookup_map[i].topic, payloadlen, payload, 0, false);
 
-        LogToDatabase(lookup_map[i].topic, payload);
+        // Only publish data if it has changed since the last time, (or if xxx time has elapsed?)
+        if(lookup_map[i].data != data) {
+    		mosquitto_publish(mqtt, NULL, lookup_map[i].topic, payloadlen, payload, 0, false);
+            LogToDatabase(lookup_map[i].topic, data, now);
 
-        // TODO: Need to know if this has stagnated
-        if( !strcmp(lookup_map[i].topic, "og/house/battery/amps") ) {
-            house_battery_amps = data * lookup_map[i].multiplier;
+            lookup_map[i].data_timestamp = now;
+            lookup_map[i].data = data;
         }
-        else if( !strcmp(lookup_map[i].topic, "og/house/battery/volts") ) {
-            house_battery_volts = data * lookup_map[i].multiplier;
-        }
+
+        // TODO: Probably broke this.  Maybe not used anymore.
+//        if( !strcmp(lookup_map[i].topic, "og/house/battery/amps") ) {
+//            house_battery_amps = data * lookup_map[i].multiplier;
+//        }
+//        else if( !strcmp(lookup_map[i].topic, "og/house/battery/volts") ) {
+//            house_battery_volts = data * lookup_map[i].multiplier;
+//        }
     }
 }
 
@@ -459,14 +468,13 @@ void PublishRequestReturn(unsigned int address, long data) {
 //    return 0;
 //}
 
-void LogToDatabase(const char *topic, const char *payload) {
+void LogToDatabase(const char *topic, const long data, const double now) {
     char *err_msg = 0;
     int rc;
     sqlite3_stmt *stmt;
-    char now[32];
     int row_count;
 
-    sprintf(now, "%0.6f", timestamp());
+//    sprintf(now, "%0.6f", timestamp);
 /*
     // Query the database for the most recent entry if it matches the current topic and payload
     if( sqlite3_prepare_v2(db,  "SELECT * FROM message WHERE topic=?1 AND payload=?2 ORDER BY timestamp DESC LIMIT 1;", -1, &stmt, NULL) ) {
@@ -517,12 +525,12 @@ void LogToDatabase(const char *topic, const char *payload) {
             fprintf(stderr, "Failed to bind topic: %s\n", sqlite3_errmsg(db));
         }
 
-        rc = sqlite3_bind_text(stmt, 2, payload, -1, SQLITE_TRANSIENT);
+        rc = sqlite3_bind_int64(stmt, 2, data);
         if(rc != SQLITE_OK) {
-            fprintf(stderr, "Failed to bind payload: %s\n", sqlite3_errmsg(db));
+            fprintf(stderr, "Failed to bind data: %s\n", sqlite3_errmsg(db));
         }
 
-        rc = sqlite3_bind_text(stmt, 3, now, -1, SQLITE_TRANSIENT);
+        rc = sqlite3_bind_double(stmt, 3, now);
         if(rc != SQLITE_OK) {
             fprintf(stderr, "Failed to bind timestamp: %s\n", sqlite3_errmsg(db));
         }
@@ -575,14 +583,15 @@ void message_callback(struct mosquitto *mosq, void *obj, const struct mosquitto_
 
         if( (i = TopicToAddress(topic)) >= 0) {
             //printf("SET matched topic: %d, %s\r\n", i, lookup_map[i].topic);
-            if( ( (lookup_map[i].writable == 1) && (lookup_map[i].bytes > 0) ) ||
-                  (lookup_map[i].writable == 1) && (lookup_map[i].storage != NULL) ) {
+            if( (lookup_map[i].writable == 1) && (lookup_map[i].bytes > 0) ) {
 
-                if(lookup_map[i].storage != NULL) {
-                    //printf("Writing internal variable for '%s'\r\n", topic);
-                    *(lookup_map[i].storage) = atof(message->payload);
+                if(lookup_map[i].address == ADDR_INTERNAL_ONLY) {
+                    lookup_map[i].data_timestamp = timestamp();
+                    lookup_map[i].data = atof(message->payload) / lookup_map[i].multiplier;
                 }
                 else {
+
+                    // Don't update the cached data.  It will happen on the MSG_RETURN_X_X.
 
                     serialPutchar(fd, '\x02');
 
@@ -626,16 +635,15 @@ void message_callback(struct mosquitto *mosq, void *obj, const struct mosquitto_
 
         if( (i = TopicToAddress(topic)) >= 0) {
             printf("GET matched topic: %d, %s\r\n", i, lookup_map[i].topic);
-            if( ( (lookup_map[i].readable == 1) && (lookup_map[i].bytes > 0) ) ||
-                  (lookup_map[i].readable == 1) && (lookup_map[i].storage != NULL) ) {
+            if( (lookup_map[i].readable == 1) && (lookup_map[i].bytes > 0) ) {
 
-                if(lookup_map[i].storage != NULL) {
-                    printf("Requesting internal variable for '%s'\r\n", topic);
-                    payloadlen = sprintf( payload, lookup_map[i].format, *(lookup_map[i].storage) ) + 1;     
-	                printf(">> <MQTT> %s = %s\r\n", lookup_map[i].topic, payload); fflush(NULL);
-		            mosquitto_publish(mqtt, NULL, lookup_map[i].topic, payloadlen, payload, 0, false);
-                }
-                else {
+//                if(lookup_map[i].storage != NULL) {
+//                    printf("Requesting internal variable for '%s'\r\n", topic);
+//                    payloadlen = sprintf( payload, lookup_map[i].format, *(lookup_map[i].storage) ) + 1;     
+//	                printf(">> <MQTT> %s = %s\r\n", lookup_map[i].topic, payload); fflush(NULL);
+//		            mosquitto_publish(mqtt, NULL, lookup_map[i].topic, payloadlen, payload, 0, false);
+//                }
+//                else {
 
                     serialPutchar(fd, '\x02');
 
@@ -659,7 +667,7 @@ void message_callback(struct mosquitto *mosq, void *obj, const struct mosquitto_
 			                printf("<< <UART> MSG_GET_8_32: %0.2X\r\n", (uint8_t)lookup_map[i].address ); fflush(NULL);
 		                    serialPrintf( fd, "%0.2X:%0.2X", (uint8_t)MSG_GET_8_32, (uint8_t)lookup_map[i].address );
                         break;
-                    }
+//                    }
 
                     serialPutchar(fd, '\x03');
 
@@ -669,122 +677,121 @@ void message_callback(struct mosquitto *mosq, void *obj, const struct mosquitto_
     }
     else {
         // Log everything except /get and /set, which are handled as special cases
-        LogToDatabase(message->topic, message->payload);
+        //LogToDatabase(message->topic, message->payload);
     }
 
 }
 
-void *ProcessStateOfCharge(void *param) {
-    const int sample_period_us = 1000000;
-    const double charged_voltage = 14.4;
-    const double tail_current_percent = 0.04;
-    const double peukert_exponent = 1.05;
-    const double current_threshold = 0.1;
-    double copy_house_battery_amps;
-    double copy_house_battery_volts;
-    const int charge_efficiency = 99;
-    const int charged_detect_time_m = 3;
-    bool sync_pending = false;
-    time_t sample_start_time, sample_end_time, sync_pending_begin_time;
-    double ah_change = 0;
-
-    enum ChargeState {
-        CS_DISCHARGING,
-        CS_CHARGING,
-        CS_CHARGED,
-        CS_SYNC_PENDING,
-    } charge_state = CS_DISCHARGING;
-
-	char payload[16];
-	int payloadlen;
-
-    time(&sample_start_time);
-
-    while(running) {
-
-        usleep(sample_period_us);
-
-        // TODO: MUTEX? >>
-        copy_house_battery_amps = house_battery_amps;
-        copy_house_battery_volts = house_battery_volts;
-        // << MUTEX?
-
-        time(&sample_end_time);
-
-        ah_change = difftime(sample_end_time, sample_start_time) / 3600 * copy_house_battery_amps;
-
-        //printf("## delta_T: %0.4f / AH Change: %0.6f\r\n", difftime(sample_end_time, sample_start_time), ah_change);
-
-        //if(charge_state == CS_CHARGING) {
-        //    ah_change *= (charge_efficiency / 100);
-        //}
-
-        // TODO: MUTEX? >>
-        ah_cumulative += ah_change;
-        // << MUTEX?
-
-        // If this hits 100 but the current is still high, we could flag that it's out of sync
-        state_of_charge =  ( (capacity + ah_cumulative) / capacity) * 100;
-        //if(state_of_charge > 100) state_of_charge = 100; // no min function
-/*
-        // >>> MQTT
-        payloadlen = sprintf( payload, "%0.1f", state_of_charge ) + 1;
-	    printf(">> <MQTT> %s = %s\r\n", "og/house/battery/soc", payload); fflush(NULL);
-		mosquitto_publish(mqtt, NULL, "og/house/battery/soc", payloadlen, payload, 0, false);
-
-        payloadlen = sprintf( payload, "%0.1f", ah_cumulative ) + 1;
-	    printf(">> <MQTT> %s = %s\r\n", "og/house/battery/ah", payload); fflush(NULL);
-		mosquitto_publish(mqtt, NULL, "og/house/battery/ah", payloadlen, payload, 0, false);
-
-        payloadlen = sprintf( payload, "%d", charge_state ) + 1;
-	    printf(">> <MQTT> %s = %s\r\n", "og/house/battery/charge_state", payload); fflush(NULL);
-		mosquitto_publish(mqtt, NULL, "og/house/battery/charge_state", payloadlen, payload, 0, false);
-*/
-        switch(charge_state) {
-
-            case CS_CHARGING:
-                if(ah_change < 0) {
-                    charge_state = CS_DISCHARGING;
-                }
-                else if (ah_change > 0) {
-                    if( (house_battery_volts >= charged_voltage) &&
-                        (house_battery_amps <= tail_current_percent) ) {
-
-                        // Set a timestamp, time_since_sinc_pending_started
-                        time(&sync_pending_begin_time);
-                        sync_pending  = true;
-
-                        if ( (sync_pending) && 
-                             (difftime(sync_pending_begin_time, sample_end_time) >= charged_detect_time_m) ) {
-                            state_of_charge = 100;
-                            ah_cumulative = 0;
-                            charge_state = CS_CHARGED;
-                        }
-                    }
-                }
-            break;
-
-            case CS_DISCHARGING:
-                if(ah_change > 0) {
-                    charge_state = CS_CHARGING;
-                }
-            break;
-
-            case CS_CHARGED:
-                if(ah_change < 0) {
-                    charge_state = CS_DISCHARGING;
-                }
-                else if(ah_change > 0) {
-                    charge_state = CS_CHARGING;
-                }
-            break;
-
-        }
-
-        sample_start_time = sample_end_time;
-    }
-}
-
+//void *ProcessStateOfCharge(void *param) {
+//    const int sample_period_us = 1000000;
+//    const double charged_voltage = 14.4;
+//    const double tail_current_percent = 0.04;
+//    const double peukert_exponent = 1.05;
+//    const double current_threshold = 0.1;
+//    double copy_house_battery_amps;
+//    double copy_house_battery_volts;
+//    const int charge_efficiency = 99;
+//    const int charged_detect_time_m = 3;
+//    bool sync_pending = false;
+//    time_t sample_start_time, sample_end_time, sync_pending_begin_time;
+//    double ah_change = 0;
+//
+//    enum ChargeState {
+//        CS_DISCHARGING,
+//        CS_CHARGING,
+//        CS_CHARGED,
+//        CS_SYNC_PENDING,
+//    } charge_state = CS_DISCHARGING;
+//
+//	char payload[16];
+//	int payloadlen;
+//
+//    time(&sample_start_time);
+//
+//    while(running) {
+//
+//        usleep(sample_period_us);
+//
+//        // TODO: MUTEX? >>
+//        copy_house_battery_amps = house_battery_amps;
+//        copy_house_battery_volts = house_battery_volts;
+//        // << MUTEX?
+//
+//        time(&sample_end_time);
+//
+//        ah_change = difftime(sample_end_time, sample_start_time) / 3600 * copy_house_battery_amps;
+//
+//        //printf("## delta_T: %0.4f / AH Change: %0.6f\r\n", difftime(sample_end_time, sample_start_time), ah_change);
+//
+//        //if(charge_state == CS_CHARGING) {
+//        //    ah_change *= (charge_efficiency / 100);
+//        //}
+//
+//        // TODO: MUTEX? >>
+//        ah_cumulative += ah_change;
+//        // << MUTEX?
+//
+//        // If this hits 100 but the current is still high, we could flag that it's out of sync
+//        state_of_charge =  ( (capacity + ah_cumulative) / capacity) * 100;
+//        //if(state_of_charge > 100) state_of_charge = 100; // no min function
+///*
+//        // >>> MQTT
+//        payloadlen = sprintf( payload, "%0.1f", state_of_charge ) + 1;
+//	    printf(">> <MQTT> %s = %s\r\n", "og/house/battery/soc", payload); fflush(NULL);
+//		mosquitto_publish(mqtt, NULL, "og/house/battery/soc", payloadlen, payload, 0, false);
+//
+//        payloadlen = sprintf( payload, "%0.1f", ah_cumulative ) + 1;
+//	    printf(">> <MQTT> %s = %s\r\n", "og/house/battery/ah", payload); fflush(NULL);
+//		mosquitto_publish(mqtt, NULL, "og/house/battery/ah", payloadlen, payload, 0, false);
+//
+//        payloadlen = sprintf( payload, "%d", charge_state ) + 1;
+//	    printf(">> <MQTT> %s = %s\r\n", "og/house/battery/charge_state", payload); fflush(NULL);
+//		mosquitto_publish(mqtt, NULL, "og/house/battery/charge_state", payloadlen, payload, 0, false);
+//*/
+//        switch(charge_state) {
+//
+//            case CS_CHARGING:
+//                if(ah_change < 0) {
+//                    charge_state = CS_DISCHARGING;
+//                }
+//                else if (ah_change > 0) {
+//                    if( (house_battery_volts >= charged_voltage) &&
+//                        (house_battery_amps <= tail_current_percent) ) {
+//
+//                        // Set a timestamp, time_since_sinc_pending_started
+//                        time(&sync_pending_begin_time);
+//                        sync_pending  = true;
+//
+//                        if ( (sync_pending) && 
+//                             (difftime(sync_pending_begin_time, sample_end_time) >= charged_detect_time_m) ) {
+//                            state_of_charge = 100;
+//                            ah_cumulative = 0;
+//                            charge_state = CS_CHARGED;
+//                        }
+//                    }
+//                }
+//            break;
+//
+//            case CS_DISCHARGING:
+//                if(ah_change > 0) {
+//                    charge_state = CS_CHARGING;
+//                }
+//            break;
+//
+//            case CS_CHARGED:
+//                if(ah_change < 0) {
+//                    charge_state = CS_DISCHARGING;
+//                }
+//                else if(ah_change > 0) {
+//                    charge_state = CS_CHARGING;
+//                }
+//            break;
+//
+//        }
+//
+//        sample_start_time = sample_end_time;
+//    }
+//}
 
 
 void *ProcessSunrise(void *param) {
@@ -846,7 +853,7 @@ int main (int argc, char** argv) {
 	pthread_create(&process_rx_thread, NULL, ProcessReceiveThread, NULL);
 	pthread_create(&process_tx_thread, NULL, ProcessTransmitThread, NULL);
     pthread_create(&process_sunrise, NULL, ProcessSunrise, NULL);
-    pthread_create(&process_state_of_charge, NULL, ProcessStateOfCharge, NULL);
+    //pthread_create(&process_state_of_charge, NULL, ProcessStateOfCharge, NULL);
 
 	sd_notify (0, "READY=1");
 
@@ -862,7 +869,7 @@ int main (int argc, char** argv) {
 	pthread_join(process_rx_thread, NULL);
 	pthread_join(process_tx_thread, NULL);
     pthread_join(process_sunrise, NULL);
-    pthread_join(process_state_of_charge, NULL);
+    //pthread_join(process_state_of_charge, NULL);
 	printf("...threads terminated\r\n"); fflush(NULL);
 
     printf("Stopping mosquitto client...\r\n"); fflush(NULL);
