@@ -58,17 +58,10 @@ static volatile int running = 1;
 pthread_t process_rx_thread;
 pthread_t process_tx_thread;
 pthread_t process_sunrise;
-//pthread_t process_state_of_charge;
 
 double house_battery_amps = 0;
 double house_battery_volts = 0;
 double state_of_charge = 0;
-
-// TODO: This needs to be initialized from persistent storage - database?
-// --OR-- have this calculated in Arduino firmware instead of here
-// Replaced with data storate in BridgeMap
-//double ah_cumulative = 0; // Goes negative as battery is discharged
-const int capacity = 198;
 
 const char *mqtt_host = "localhost";
 const unsigned int mqtt_port = 1883;
@@ -448,14 +441,6 @@ void PublishRequestReturn(unsigned int address, long data) {
             lookup_map[i].data_timestamp = now;
             lookup_map[i].data = data;
         }
-
-        // TODO: Probably broke this.  Maybe not used anymore.
-//        if( !strcmp(lookup_map[i].topic, "og/house/battery/amps") ) {
-//            house_battery_amps = data * lookup_map[i].multiplier;
-//        }
-//        else if( !strcmp(lookup_map[i].topic, "og/house/battery/volts") ) {
-//            house_battery_volts = data * lookup_map[i].multiplier;
-//        }
     }
 }
 
@@ -474,73 +459,31 @@ void LogToDatabase(const char *topic, const long data, const double now) {
     sqlite3_stmt *stmt;
     int row_count;
 
-//    sprintf(now, "%0.6f", timestamp);
-/*
-    // Query the database for the most recent entry if it matches the current topic and payload
-    if( sqlite3_prepare_v2(db,  "SELECT * FROM message WHERE topic=?1 AND payload=?2 ORDER BY timestamp DESC LIMIT 1;", -1, &stmt, NULL) ) {
-        fprintf(stderr, "Failed to prepare statement: %s\r\n", sqlite3_errmsg(db));
+    if( sqlite3_prepare_v2(db, "INSERT INTO message(topic,payload,timestamp) VALUES(?,?,?);", -1, &stmt, NULL) ) {
+        fprintf(stderr, "Failed to prepare statement: %s\n", sqlite3_errmsg(db));
         return;
     }
 
-    if( sqlite3_bind_text(stmt, 1, topic, -1, SQLITE_TRANSIENT) ) {
+    rc = sqlite3_bind_text(stmt, 1, topic, -1, SQLITE_TRANSIENT);
+    if(rc != SQLITE_OK) {
         fprintf(stderr, "Failed to bind topic: %s\n", sqlite3_errmsg(db));
-        return;
     }
 
-    if( sqlite3_bind_text(stmt, 2, payload, -1, SQLITE_TRANSIENT) ) {
-        fprintf(stderr, "Failed to bind payload: %s\n", sqlite3_errmsg(db));
-        return;
+    rc = sqlite3_bind_int64(stmt, 2, data);
+    if(rc != SQLITE_OK) {
+        fprintf(stderr, "Failed to bind data: %s\n", sqlite3_errmsg(db));
     }
 
-    row_count = 0;
-    while( sqlite3_step(stmt) != SQLITE_DONE ) {
-        row_count++;  // Should never exceed 1, but small chance there are two.  We only care about 0 vs !0
+    rc = sqlite3_bind_double(stmt, 3, now);
+    if(rc != SQLITE_OK) {
+        fprintf(stderr, "Failed to bind timestamp: %s\n", sqlite3_errmsg(db));
+    }
+
+    if ( sqlite3_step(stmt) != SQLITE_DONE ) {
+        fprintf(stderr, "Failed to execute statement: %s\n", sqlite3_errmsg(db));
     }
 
     sqlite3_finalize(stmt);
-*/
-    // If no rows matched, then the most recent DB entry is different than the current so go ahead and add it.
-//    if (row_count == 0) {
-
-
-//---------------------------------------
-//---------------------------------------
-// Upon insertion to database, also store the topic/payload internally.  Before insertion, compare 
-// to previous and only insert if payload for topic has changed by a certain amount (or a certain amount of time has passed?)
-//
-//    Maybe use 'storage' in BridgeMap?
-//---------------------------------------
-//---------------------------------------
-
-
-    if (1) {
-
-        if( sqlite3_prepare_v2(db, "INSERT INTO message(topic,payload,timestamp) VALUES(?,?,?);", -1, &stmt, NULL) ) {
-            fprintf(stderr, "Failed to prepare statement: %s\n", sqlite3_errmsg(db));
-            return;
-        }
-
-        rc = sqlite3_bind_text(stmt, 1, topic, -1, SQLITE_TRANSIENT);
-        if(rc != SQLITE_OK) {
-            fprintf(stderr, "Failed to bind topic: %s\n", sqlite3_errmsg(db));
-        }
-
-        rc = sqlite3_bind_int64(stmt, 2, data);
-        if(rc != SQLITE_OK) {
-            fprintf(stderr, "Failed to bind data: %s\n", sqlite3_errmsg(db));
-        }
-
-        rc = sqlite3_bind_double(stmt, 3, now);
-        if(rc != SQLITE_OK) {
-            fprintf(stderr, "Failed to bind timestamp: %s\n", sqlite3_errmsg(db));
-        }
-
-        if ( sqlite3_step(stmt) != SQLITE_DONE ) {
-            fprintf(stderr, "Failed to execute statement: %s\n", sqlite3_errmsg(db));
-        }
-
-        sqlite3_finalize(stmt);
-    }
 }
 
 bool StringHasSuffix(const char *s, const char *suffix) {
@@ -591,7 +534,7 @@ void message_callback(struct mosquitto *mosq, void *obj, const struct mosquitto_
                 }
                 else {
 
-                    // Don't update the cached data.  It will happen on the MSG_RETURN_X_X.
+                    // Don't update the cached data here.  It will happen when it gets confirmed by the MSG_RETURN_X_X.
 
                     serialPutchar(fd, '\x02');
 
@@ -637,162 +580,39 @@ void message_callback(struct mosquitto *mosq, void *obj, const struct mosquitto_
             printf("GET matched topic: %d, %s\r\n", i, lookup_map[i].topic);
             if( (lookup_map[i].readable == 1) && (lookup_map[i].bytes > 0) ) {
 
-//                if(lookup_map[i].storage != NULL) {
-//                    printf("Requesting internal variable for '%s'\r\n", topic);
-//                    payloadlen = sprintf( payload, lookup_map[i].format, *(lookup_map[i].storage) ) + 1;     
-//	                printf(">> <MQTT> %s = %s\r\n", lookup_map[i].topic, payload); fflush(NULL);
-//		            mosquitto_publish(mqtt, NULL, lookup_map[i].topic, payloadlen, payload, 0, false);
-//                }
-//                else {
+                serialPutchar(fd, '\x02');
 
-                    serialPutchar(fd, '\x02');
+                switch(lookup_map[i].bytes) {
 
-                    switch(lookup_map[i].bytes) {
+                    case 1:
+                        printf("<< <UART> MSG_GET_8_8: %0.2X\r\n", (uint8_t)lookup_map[i].address ); fflush(NULL);
+		                serialPrintf( fd, "%0.2X:%0.2X", (uint8_t)MSG_GET_8_8, (uint8_t)lookup_map[i].address );
+                    break;
 
-                        case 1:
-			                printf("<< <UART> MSG_GET_8_8: %0.2X\r\n", (uint8_t)lookup_map[i].address ); fflush(NULL);
-		                    serialPrintf( fd, "%0.2X:%0.2X", (uint8_t)MSG_GET_8_8, (uint8_t)lookup_map[i].address );
-                        break;
+                    case 2:
+		           	    printf("<< <UART> MSG_GET_8_16: %0.2X\r\n", (uint8_t)lookup_map[i].address ); fflush(NULL);
+                        serialPrintf( fd, "%0.2X:%0.2X", (uint8_t)MSG_GET_8_16, (uint8_t)lookup_map[i].address );
+                    break;
 
-                        case 2:
-		           		    printf("<< <UART> MSG_GET_8_16: %0.2X\r\n", (uint8_t)lookup_map[i].address ); fflush(NULL);
-                            serialPrintf( fd, "%0.2X:%0.2X", (uint8_t)MSG_GET_8_16, (uint8_t)lookup_map[i].address );
-                        break;
+//                    case 3:
+//		                  serialPrintf( fd, "0.2X:%0.2X", (uint8_t)MSG_GET_8_24 );
+//                    break;
 
-//                        case 3:
-//		                      serialPrintf( fd, "0.2X:%0.2X", (uint8_t)MSG_GET_8_24 );
-//                        break;
+                    case 4:
+			            printf("<< <UART> MSG_GET_8_32: %0.2X\r\n", (uint8_t)lookup_map[i].address ); fflush(NULL);
+		                serialPrintf( fd, "%0.2X:%0.2X", (uint8_t)MSG_GET_8_32, (uint8_t)lookup_map[i].address );
+                    break;
 
-                        case 4:
-			                printf("<< <UART> MSG_GET_8_32: %0.2X\r\n", (uint8_t)lookup_map[i].address ); fflush(NULL);
-		                    serialPrintf( fd, "%0.2X:%0.2X", (uint8_t)MSG_GET_8_32, (uint8_t)lookup_map[i].address );
-                        break;
-//                    }
-
-                    serialPutchar(fd, '\x03');
-
+                    default:
+                        fprintf(stderr, "Unhandled number of bytes (%d) in %s", lookup_map[i].bytes, lookup_map[i].topic);
                 }
+
+                serialPutchar(fd, '\x03');
+
             }
         }
     }
-    else {
-        // Log everything except /get and /set, which are handled as special cases
-        //LogToDatabase(message->topic, message->payload);
-    }
-
 }
-
-//void *ProcessStateOfCharge(void *param) {
-//    const int sample_period_us = 1000000;
-//    const double charged_voltage = 14.4;
-//    const double tail_current_percent = 0.04;
-//    const double peukert_exponent = 1.05;
-//    const double current_threshold = 0.1;
-//    double copy_house_battery_amps;
-//    double copy_house_battery_volts;
-//    const int charge_efficiency = 99;
-//    const int charged_detect_time_m = 3;
-//    bool sync_pending = false;
-//    time_t sample_start_time, sample_end_time, sync_pending_begin_time;
-//    double ah_change = 0;
-//
-//    enum ChargeState {
-//        CS_DISCHARGING,
-//        CS_CHARGING,
-//        CS_CHARGED,
-//        CS_SYNC_PENDING,
-//    } charge_state = CS_DISCHARGING;
-//
-//	char payload[16];
-//	int payloadlen;
-//
-//    time(&sample_start_time);
-//
-//    while(running) {
-//
-//        usleep(sample_period_us);
-//
-//        // TODO: MUTEX? >>
-//        copy_house_battery_amps = house_battery_amps;
-//        copy_house_battery_volts = house_battery_volts;
-//        // << MUTEX?
-//
-//        time(&sample_end_time);
-//
-//        ah_change = difftime(sample_end_time, sample_start_time) / 3600 * copy_house_battery_amps;
-//
-//        //printf("## delta_T: %0.4f / AH Change: %0.6f\r\n", difftime(sample_end_time, sample_start_time), ah_change);
-//
-//        //if(charge_state == CS_CHARGING) {
-//        //    ah_change *= (charge_efficiency / 100);
-//        //}
-//
-//        // TODO: MUTEX? >>
-//        ah_cumulative += ah_change;
-//        // << MUTEX?
-//
-//        // If this hits 100 but the current is still high, we could flag that it's out of sync
-//        state_of_charge =  ( (capacity + ah_cumulative) / capacity) * 100;
-//        //if(state_of_charge > 100) state_of_charge = 100; // no min function
-///*
-//        // >>> MQTT
-//        payloadlen = sprintf( payload, "%0.1f", state_of_charge ) + 1;
-//	    printf(">> <MQTT> %s = %s\r\n", "og/house/battery/soc", payload); fflush(NULL);
-//		mosquitto_publish(mqtt, NULL, "og/house/battery/soc", payloadlen, payload, 0, false);
-//
-//        payloadlen = sprintf( payload, "%0.1f", ah_cumulative ) + 1;
-//	    printf(">> <MQTT> %s = %s\r\n", "og/house/battery/ah", payload); fflush(NULL);
-//		mosquitto_publish(mqtt, NULL, "og/house/battery/ah", payloadlen, payload, 0, false);
-//
-//        payloadlen = sprintf( payload, "%d", charge_state ) + 1;
-//	    printf(">> <MQTT> %s = %s\r\n", "og/house/battery/charge_state", payload); fflush(NULL);
-//		mosquitto_publish(mqtt, NULL, "og/house/battery/charge_state", payloadlen, payload, 0, false);
-//*/
-//        switch(charge_state) {
-//
-//            case CS_CHARGING:
-//                if(ah_change < 0) {
-//                    charge_state = CS_DISCHARGING;
-//                }
-//                else if (ah_change > 0) {
-//                    if( (house_battery_volts >= charged_voltage) &&
-//                        (house_battery_amps <= tail_current_percent) ) {
-//
-//                        // Set a timestamp, time_since_sinc_pending_started
-//                        time(&sync_pending_begin_time);
-//                        sync_pending  = true;
-//
-//                        if ( (sync_pending) && 
-//                             (difftime(sync_pending_begin_time, sample_end_time) >= charged_detect_time_m) ) {
-//                            state_of_charge = 100;
-//                            ah_cumulative = 0;
-//                            charge_state = CS_CHARGED;
-//                        }
-//                    }
-//                }
-//            break;
-//
-//            case CS_DISCHARGING:
-//                if(ah_change > 0) {
-//                    charge_state = CS_CHARGING;
-//                }
-//            break;
-//
-//            case CS_CHARGED:
-//                if(ah_change < 0) {
-//                    charge_state = CS_DISCHARGING;
-//                }
-//                else if(ah_change > 0) {
-//                    charge_state = CS_CHARGING;
-//                }
-//            break;
-//
-//        }
-//
-//        sample_start_time = sample_end_time;
-//    }
-//}
-
 
 void *ProcessSunrise(void *param) {
     while(running) {
@@ -853,7 +673,6 @@ int main (int argc, char** argv) {
 	pthread_create(&process_rx_thread, NULL, ProcessReceiveThread, NULL);
 	pthread_create(&process_tx_thread, NULL, ProcessTransmitThread, NULL);
     pthread_create(&process_sunrise, NULL, ProcessSunrise, NULL);
-    //pthread_create(&process_state_of_charge, NULL, ProcessStateOfCharge, NULL);
 
 	sd_notify (0, "READY=1");
 
@@ -869,7 +688,6 @@ int main (int argc, char** argv) {
 	pthread_join(process_rx_thread, NULL);
 	pthread_join(process_tx_thread, NULL);
     pthread_join(process_sunrise, NULL);
-    //pthread_join(process_state_of_charge, NULL);
 	printf("...threads terminated\r\n"); fflush(NULL);
 
     printf("Stopping mosquitto client...\r\n"); fflush(NULL);
