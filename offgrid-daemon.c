@@ -460,24 +460,24 @@ void LogToDatabase(const char *topic, const long data, const double now) {
     sqlite3_stmt *stmt;
     int row_count;
 
-    if( sqlite3_prepare_v2(db, "INSERT INTO message(topic,payload,timestamp) VALUES(?,?,?);", -1, &stmt, NULL) ) {
+    if( sqlite3_prepare_v2(db, "INSERT INTO message(payload,timestamp,topic_id) VALUES(?1,?2,(SELECT id FROM topic WHERE name=?3));", -1, &stmt, NULL) ) {
         fprintf(stderr, "Failed to prepare statement: %s\n", sqlite3_errmsg(db));
         return;
     }
 
-    rc = sqlite3_bind_text(stmt, 1, topic, -1, SQLITE_TRANSIENT);
-    if(rc != SQLITE_OK) {
-        fprintf(stderr, "Failed to bind topic: %s\n", sqlite3_errmsg(db));
-    }
-
-    rc = sqlite3_bind_int64(stmt, 2, data);
+    rc = sqlite3_bind_int64(stmt, 1, data);
     if(rc != SQLITE_OK) {
         fprintf(stderr, "Failed to bind data: %s\n", sqlite3_errmsg(db));
     }
 
-    rc = sqlite3_bind_double(stmt, 3, now);
+    rc = sqlite3_bind_double(stmt, 2, now);
     if(rc != SQLITE_OK) {
         fprintf(stderr, "Failed to bind timestamp: %s\n", sqlite3_errmsg(db));
+    }
+
+    rc = sqlite3_bind_text(stmt, 3, topic, -1, SQLITE_TRANSIENT);
+    if(rc != SQLITE_OK) {
+        fprintf(stderr, "Failed to bind topic: %s\n", sqlite3_errmsg(db));
     }
 
     if ( sqlite3_step(stmt) != SQLITE_DONE ) {
