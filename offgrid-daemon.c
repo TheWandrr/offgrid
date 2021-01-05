@@ -433,9 +433,10 @@ void PublishRequestReturn(unsigned int address, long data) {
         payloadlen = sprintf( payload, lookup_map[i].format, data * lookup_map[i].multiplier ) + 1;
         //DEBUG//printf("<< <MQTT> %s = %s\r\n", lookup_map[i].topic, payload); fflush(NULL);
 
-        // Only publish data if it has changed since the last time, (or if xxx time has elapsed?)
+        mosquitto_publish(mqtt, NULL, lookup_map[i].topic, payloadlen, payload, 0, false);
+
+        // Only store to database if it has changed since the last time
         if(lookup_map[i].data != data) {
-    		mosquitto_publish(mqtt, NULL, lookup_map[i].topic, payloadlen, payload, 0, false);
             LogToDatabase(lookup_map[i].topic, data, now);
 
             lookup_map[i].data_timestamp = now;
