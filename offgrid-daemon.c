@@ -120,13 +120,13 @@ struct BridgeMap lookup_map[] = {
     //{ 0xB7, 2, "", 1, 1, "", (1) },
 };
 
-// Returns epoch time in whole milliseconds
+// Returns epoch time in whole centiseconds (seconds * 0.01)
 uint64_t timestamp(void) {
     struct timespec spec;
 
     clock_gettime(CLOCK_REALTIME, &spec);
 
-    return ( spec.tv_sec + (spec.tv_nsec / 1.0e9) ) * 1000ull;
+    return ( spec.tv_sec + (spec.tv_nsec / 1.0e9) ) * 100ull;
 }
 
 int AddressToTopic(const unsigned int address) {
