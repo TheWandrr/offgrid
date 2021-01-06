@@ -4,9 +4,8 @@ CREATE TABLE topic (
 );
 
 CREATE TABLE message (
-    id INTEGER PRIMARY KEY NOT NULL,
     payload INTEGER,
-    timestamp REAL NOT NULL,
+    timestamp INTEGER NOT NULL,
     topic_id INTEGER NOT NULL,
     FOREIGN KEY(topic_id) REFERENCES topic(id)
 );

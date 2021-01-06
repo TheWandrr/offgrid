@@ -29,7 +29,7 @@
 
 void ParseMessage(char *msg_buf);
 void PublishRequestReturn(unsigned int address, long data);
-void LogToDatabase(const char *topic, const long data, const double now);
+void LogToDatabase(const char *topic, const long data, const uint64_t now);
 
 sqlite3 *db;
 const char *DB_FILENAME = "/usr/local/lib/mqtt.db";
@@ -51,7 +51,7 @@ struct BridgeMap {
     const char *format;
     const double multiplier;
     long data;
-    double data_timestamp;
+    uint64_t data_timestamp;
 };
 
 static volatile int running = 1;
@@ -120,11 +120,13 @@ struct BridgeMap lookup_map[] = {
     //{ 0xB7, 2, "", 1, 1, "", (1) },
 };
 
-double timestamp(void) {
+// Returns epoch time in whole milliseconds
+uint64_t timestamp(void) {
     struct timespec spec;
 
     clock_gettime(CLOCK_REALTIME, &spec);
-    return spec.tv_sec + ( spec.tv_nsec / 1.0e9 );
+
+    return ( spec.tv_sec + (spec.tv_nsec / 1.0e9) ) * 1000ull;
 }
 
 int AddressToTopic(const unsigned int address) {
@@ -425,7 +427,7 @@ void *ProcessTransmitThread(void *param) {
 void PublishRequestReturn(unsigned int address, long data) {
 	char payload[256];
 	int payloadlen;
-    double now;
+    uint64_t now;
     int i;
 
     if( (i = AddressToTopic(address)) >= 0 ) {
@@ -454,11 +456,13 @@ void PublishRequestReturn(unsigned int address, long data) {
 //    return 0;
 //}
 
-void LogToDatabase(const char *topic, const long data, const double now) {
+void LogToDatabase(const char *topic, const long data, const uint64_t now) {
     char *err_msg = 0;
     int rc;
     sqlite3_stmt *stmt;
     int row_count;
+
+    // TODO: Check that topic exists first.  Output error and skip insertion if it doesn't.
 
     if( sqlite3_prepare_v2(db, "INSERT INTO message(payload,timestamp,topic_id) VALUES(?1,?2,(SELECT id FROM topic WHERE name=?3));", -1, &stmt, NULL) ) {
         fprintf(stderr, "Failed to prepare statement: %s\n", sqlite3_errmsg(db));
@@ -470,7 +474,7 @@ void LogToDatabase(const char *topic, const long data, const double now) {
         fprintf(stderr, "Failed to bind data: %s\n", sqlite3_errmsg(db));
     }
 
-    rc = sqlite3_bind_double(stmt, 2, now);
+    rc = sqlite3_bind_int64(stmt, 2, now);
     if(rc != SQLITE_OK) {
         fprintf(stderr, "Failed to bind timestamp: %s\n", sqlite3_errmsg(db));
     }
