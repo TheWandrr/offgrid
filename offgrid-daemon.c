@@ -31,94 +31,129 @@ void ParseMessage(char *msg_buf);
 void PublishRequestReturn(unsigned int address, long data);
 void LogToDatabase(const char *topic, const long data, const uint64_t now);
 
-sqlite3 *db;
-const char *DB_FILENAME = "/usr/local/lib/mqtt.db";
-
 enum ReceiveState {
-        GET_STX,
-        GET_DATA,
+    GET_STX,
+    GET_DATA,
 };
 
-const int ADDR_INTERNAL_ONLY = -1;
-
-// Only used for memory mapped data from UART-connected hardware
-struct BridgeMap {
-    const int address;
-    const unsigned int bytes;
-    const char *topic;
-    const bool readable;
-    const bool writable;
-    const char *format;
-    const double multiplier;
-    long data;
-    uint64_t data_timestamp;
+enum InterfaceAccessMask {
+    AM_NONE =       0b00000000,
+    AM_READ =       0b00000001,
+    AM_WRITE =      0b00000010,
+    AM_READWRITE =  0b00000011,
 };
+
+// This structure is shared with firmware and defines topic interfaces
+// In this module, it is the data contained within a linked list where nodes are added as the device reports/exposes them
+// TODO: Add ability to enable/disable database logging (command line, config file, ?)
+struct Interface {
+    uint16_t address;
+    uint8_t bytes;
+    int8_t exponent;
+    enum InterfaceAccessMask access_mask;
+    char name[255];
+    char unit[15];
+    long data; // Not part of interface definition
+    uint64_t data_timestamp; // Not part of interface definition
+};
+
+struct Node {
+    struct Interface *interface;
+    struct Node *next;
+};
+
+
+
+struct Node *interface_root = NULL;
 
 static volatile int running = 1;
 pthread_t process_rx_thread;
 pthread_t process_tx_thread;
 pthread_t process_sunrise;
 
-double house_battery_amps = 0;
-double house_battery_volts = 0;
-double state_of_charge = 0;
-
+struct mosquitto *mqtt;
 const char *mqtt_host = "localhost";
 const unsigned int mqtt_port = 1883;
 
-// Used to translate between UART-connected hardware memory-mapped variables and MQTT topics
-// Fixed point data is shifted into an integer value for serial transmission, database storage, and most recent cached value
-struct BridgeMap lookup_map[] = {
-    // Switches
-    { 0x10, 4, "og/setting/broadcast_period_ms", 1, 1, "%0.0f", 1, 0, 0 },
+int fd;
+static char message_buffer[1023] = {0};
 
-    // Firmware battery monitor variables (RAM)
-    { 0x20, 2, "og/batmon/bank0/volts", 1, 0, "%0.2f", 0.01, 0, 0 },
-    { 0x21, 2, "og/batmon/bank0/amps", 1, 0, "%0.1f", 0.1, 0, 0 },
-    { 0x22, 2, "og/batmon/bank0/ah", 1, 1, "%0.1f", 0.1, 0, 0 },
-    { 0x23, 2, "og/batmon/bank0/soc", 1, 1, "%0.1f", 0.01, 0, 0 },
+sqlite3 *db;
+const char *DB_FILENAME = "/usr/local/lib/mqtt.db";
 
-    // Firmware battery monitor constants (EEPROM)
-    { 0x24, 4, "og/batmon/bank0/amps_multiplier", 1, 1, "%0.6f", 0.000001, 0, 0 },
-    { 0x25, 4, "og/batmon/bank0/volts_multiplier", 1, 1, "%0.6f", 0.000001, 0, 0 },
-    { 0x26, 2, "og/batmon/bank0/amphours_capacity", 1, 1, "%0.1f", 0.1, 0, 0 },
-    { 0x27, 2, "og/batmon/bank0/volts_charged", 1, 1, "%0.3f", 0.001, 0, 0 },
-    { 0x28, 2, "og/batmon/bank0/minutes_charged_detection_time", 1, 1, "%0.1f", 0.1, 0, 0 },
-    { 0x29, 4, "og/batmon/bank0/current_threshold", 1, 1, "%0.6f", .000001, 0, 0 },
-    { 0x2A, 1, "og/batmon/bank0/tail_current_factor", 1, 1, "%0.2f", .01, 0, 0 },
-    { 0x2B, 1, "og/batmon/bank0/peukert_factor", 1, 1, "%0.2f", .01, 0, 0 },
-    { 0x2C, 1, "og/batmon/bank0/charge_efficiency_factor", 1, 1, "%0.2f", .01, 0, 0 },
 
-//    { 0x30, 2, "og/batmon/bank1/volts", 1, 0, "%0.2f", 0.01 },
-//    { 0x31, 2, "og/batmon/bank1/amps", 1, 0, "%0.1f", 0.1 },
-//    { 0x32, 2, "og/batmon/bank1/ah", 1, 1, "%0.1f", 0.1 },
-//    { 0x33, 2, "og/batmon/bank1/soc", 1, 1, "%0.1f", 0.01 },
 
-    // PWM outputs
-    { 0xA0, 1, "og/house/light/ceiling", 1, 1, "%0.0f", 1, 0, 0 },
-    //{ 0xA1, 1, "", 1, 1, "", (1) },
-    //{ 0xA2, 1, "", 1, 1, "", (1) },
-    //{ 0xA3, 1, "", 1, 1, "", (1) },
-    //{ 0xA4, 1, "", 1, 1, "", (1) },
-    //{ 0xA5, 1, "", 1, 1, "", (1) },
 
-    // ON/OFF outputs
-    { 0xA6, 1, "og/house/light/ceiling_encoder", 1, 1, "%0.0f", 1, 0, 0 },
-    //{ 0xA7, 1, "", 1, 1, "", (1) },
+/////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-    // Differential ADC inputs, 75mV shunt ** SIGNED 16 BIT
-    { 0xB0, 2, "og/house/battery/amps", 1, 0, "%0.1f", (0.0000078125 * 500.0 / 0.050 * 1.031), 0, 0 }, // Calibrated at 2.47A
-    { 0xB1, 2, "og/house/fuse_panel/amps", 1, 0, "%0.1f", (0.0000078125 * 50.0 / 0.075), 0, 0 },
-    { 0xB2, 2, "og/house/vehicle_in/amps", 1, 0, "%0.1f", (0.0000078125 * 200.0 / 0.075), 0, 0 },
-    { 0xB3, 2, "og/house/inverter/amps", 1, 0, "%0.1f", (0.0000078125 * 200.0 / 0.075), 0, 0 },
 
-    // Single ended ADC inputs, 12V
-    // !! RAW values no longer used !!
-//    { 0xB4, 2, "og/house/battery/volts", 1, 0, "%0.2f", (0.000125 * 4 * 1.05350), 0, 0 }, // Calibrated @ 13.85 V
-//    { 0xB5, 2, "og/vehicle/battery/volts", 1, 0, "%0.2f", (0.000125 * 4 * 1.04390), 0, 0 }, // Calibrated at 14.42 V
-    //{ 0xB6, 2, "", 1, 1, "", (1) },
-    //{ 0xB7, 2, "", 1, 1, "", (1) },
-};
+
+
+struct Node* AddInterface(struct Node *node, struct Interface *interface) {
+
+    if(node == NULL) {
+        node = (struct Node*)malloc(sizeof(struct Node));
+        node->next = NULL;
+        node->interface = interface;
+    }
+    else {
+        node->next = AddInterface(node->next, interface);
+    }
+
+    return node;
+}
+
+// Search for topic by name or address (but not both!)
+struct Node* FindInterface(struct Node *node, char *name, uint16_t address) {
+    if( node != NULL ) {
+        while (node->next != NULL) {
+            if( node->interface !=  NULL ) {
+                if(  ( name != NULL ) && ( !strcmp(node->interface->name, name) )  ) {
+                    return node;
+                }
+                else if(  ( address != 0 ) && ( node->interface->address == address)  ) {
+                    return node;
+                }
+            }
+
+            node = node->next;
+        }
+    }
+
+    return NULL;
+}
+
+struct Interface * NewInterface(uint16_t address, uint8_t bytes, int8_t exponent, enum InterfaceAccessMask access_mask, const char *name, const char *unit) {
+    struct Interface *interface = NULL;
+
+    interface = (struct Interface *)malloc(sizeof(struct Interface));
+
+    if( interface != NULL ) {
+        interface->address = address;
+        interface->bytes = bytes;
+        interface->exponent = exponent;
+        interface->access_mask = access_mask;
+        strcpy(interface->name, name);
+        strcpy(interface->unit, unit);
+    }
+
+    return interface;
+}
+
+// Based on a negative or positive power of ten, create a format string with the same decimal places
+void MakeFormatString(char *fmt, int8_t exponent) {
+    if(exponent >= 0) {
+        fmt = "%0.0f";
+    }
+    else {
+        fmt = "%0.";
+        while(exponent < -1) {
+            strcat(fmt, "0");
+            exponent++;
+        }
+        strcat(fmt, "1f");
+    }
+}
 
 // Returns epoch time in whole centiseconds (seconds * 0.01)
 uint64_t timestamp(void) {
@@ -128,40 +163,6 @@ uint64_t timestamp(void) {
 
     return ( spec.tv_sec + (spec.tv_nsec / 1.0e9) ) * 100ull;
 }
-
-int AddressToTopic(const unsigned int address) {
-    int i;
-
-    for (i = 0; i < ( sizeof(lookup_map) / sizeof(lookup_map[0]) ); i++) {
-        if (lookup_map[i].address == address) {
-            return i;
-        }
-    }
-
-    return -1;
-}
-
-int TopicToAddress(const char *topic) {
-    int i;
-
-    for (i = 0; i < ( sizeof(lookup_map) / sizeof(lookup_map[0]) ); i++) {
-        if ( !strcmp(lookup_map[i].topic, topic) ) {
-
-            //printf("TopicToAddress MATCHED: %s at i=%d\r\n", topic, i);
-            return i;
-        }
-    }
-
-    return -1;
-}
-
-
-// TODO: Eventually move these to classes
-int fd; // File descriptor for serial port
-// TODO: Circular Buffer rx_uart
-// TODO: Circular Buffer tx_uart
-static char message_buffer[32] = {0}; // KEEP INCOMING MESSAGES SMALL!
-struct mosquitto *mqtt;
 
 void SignalHandler(int signum)
 {
@@ -402,6 +403,12 @@ void ParseMessage(char *msg_buf) {
 			PublishRequestReturn( (uint8_t)arg[0], (uint32_t)arg[1] );
 		}
 	break;
+
+    case MSG_RETURN_INTERFACE:
+        if(arg_count == 5) {
+            printf("MSG_RETURN_INTERFACE: CODE STUB\r\n"); fflush(NULL);
+            AddInterface( interface_root, NewInterface((uint16_t)arg[0], (uint8_t)arg[1], (int8_t)arg[2], (uint8_t)arg[3], "", "") ); // FIXME: INCOMPLETE
+        }
     }
 
   }
@@ -428,21 +435,26 @@ void PublishRequestReturn(unsigned int address, long data) {
 	char payload[256];
 	int payloadlen;
     uint64_t now;
-    int i;
+    struct Node *node;
+    struct Interface *interface;
+    char fmt[15];
 
-    if( (i = AddressToTopic(address)) >= 0 ) {
+    if( (node = FindInterface(interface_root, NULL, address)) != NULL ) {
+        interface = node->interface;
+
         now = timestamp();
-        payloadlen = sprintf( payload, lookup_map[i].format, data * lookup_map[i].multiplier ) + 1;
+        MakeFormatString(fmt, interface->exponent),
+        payloadlen = sprintf( payload, fmt,  data * pow(10, interface->exponent) ) + 1;
         //DEBUG//printf("<< <MQTT> %s = %s\r\n", lookup_map[i].topic, payload); fflush(NULL);
 
-        mosquitto_publish(mqtt, NULL, lookup_map[i].topic, payloadlen, payload, 0, false);
+        mosquitto_publish(mqtt, NULL, interface->name, payloadlen, payload, 0, false);
 
         // Only store to database if it has changed since the last time
-        if(lookup_map[i].data != data) {
-            LogToDatabase(lookup_map[i].topic, data, now);
+        if( interface->data != data ) {
+            LogToDatabase(interface->name, data, now);
 
-            lookup_map[i].data_timestamp = now;
-            lookup_map[i].data = data;
+            interface->data_timestamp = now;
+            interface->data = data;
         }
     }
 }
@@ -462,7 +474,7 @@ void LogToDatabase(const char *topic, const long data, const uint64_t now) {
     sqlite3_stmt *stmt;
     int row_count;
 
-    // TODO: Check that topic exists first.  Output error and skip insertion if it doesn't.
+    // TODO: Look up topic.  If it doesn't exist, add it before inserting the message.
 
     if( sqlite3_prepare_v2(db, "INSERT INTO message(payload,timestamp,topic_id) VALUES(?1,?2,(SELECT id FROM topic WHERE name=?3));", -1, &stmt, NULL) ) {
         fprintf(stderr, "Failed to prepare statement: %s\n", sqlite3_errmsg(db));
@@ -508,13 +520,14 @@ bool StringHasSuffix(const char *s, const char *suffix) {
 }
 
 void message_callback(struct mosquitto *mosq, void *obj, const struct mosquitto_message *message) {
-    int i;
+//    int i;
     char *suffix_set = "/set"; // Append to a topic to write a value
     char *suffix_get = "/get"; // Append to a topic to force it to be published immediately
     char topic[255];
     int newlen;
 	char payload[16];
 	int payloadlen;
+    struct Node *node;
 
 	//DEBUG//printf(">> <MQTT> %s = %s\r\n", message->topic, message->payload); fflush(NULL);
 
@@ -529,45 +542,38 @@ void message_callback(struct mosquitto *mosq, void *obj, const struct mosquitto_
         topic[newlen] = '\0';
         //printf("Stripped Topic: %s\r\n", topic);
 
-        if( (i = TopicToAddress(topic)) >= 0) {
+        if( (node = FindInterface(interface_root, topic, 0)) != NULL ) {
             //printf("SET matched topic: %d, %s\r\n", i, lookup_map[i].topic);
-            if( (lookup_map[i].writable == 1) && (lookup_map[i].bytes > 0) ) {
+            if( (node->interface->access_mask & AM_WRITE) && (node->interface->bytes > 0) ) {
 
-                if(lookup_map[i].address == ADDR_INTERNAL_ONLY) {
-                    lookup_map[i].data_timestamp = timestamp();
-                    lookup_map[i].data = atof(message->payload) / lookup_map[i].multiplier;
+                // Don't update the cached data here.  It will happen when it gets confirmed by the MSG_RETURN_X_X.
+
+                serialPutchar(fd, '\x02');
+
+                switch(node->interface->bytes) {
+
+                    case 1:
+		                printf("<< <UART> MSG_SET_8_8: %0.2X, %0.2X\r\n", (uint8_t)node->interface->address, (uint8_t)( atof(message->payload) / pow(10, node->interface->exponent) ) ); fflush(NULL);
+	                    serialPrintf( fd, "%0.2X:%0.2X,%0.2X", (uint8_t)MSG_SET_8_8, (uint8_t)node->interface->address, (uint8_t)( atof(message->payload) / pow(10, node->interface->exponent) ) );
+                    break;
+
+                    case 2:
+           		        printf("<< <UART> MSG_SET_8_16: %0.2X, %0.4X\r\n", (uint8_t)node->interface->address, (uint16_t)( atof(message->payload) / pow(10, node->interface->exponent) ) ); fflush(NULL);
+                        serialPrintf( fd, "%0.2X:%0.2X,%0.4X", (uint8_t)MSG_SET_8_16, (uint8_t)node->interface->address, (uint16_t)( atof(message->payload) / pow(10, node->interface->exponent) ) );
+                    break;
+
+//                    case 3:
+//	                      serialPrintf( fd, "0.2X:%0.2X,%0.6X", (uint8_t)MSG_SET_8_24, (uint8_t)lookup_map[i].address, (uint32_t)(atoi(message->payload)) );
+//                    break;
+
+                    case 4:
+		                printf("<< <UART> MSG_SET_8_32: %0.2X, %0.8lX\r\n", (uint8_t)node->interface->address, (uint32_t)( atof(message->payload) / pow(10, node->interface->exponent) ) ); fflush(NULL);
+	                    serialPrintf( fd, "%0.2X:%0.2X,%0.8lX", (uint8_t)MSG_SET_8_32, (uint8_t)node->interface->address, (uint32_t)( atof(message->payload) / pow(10, node->interface->exponent) ) );
+                    break;
                 }
-                else {
 
-                    // Don't update the cached data here.  It will happen when it gets confirmed by the MSG_RETURN_X_X.
+                serialPutchar(fd, '\x03');
 
-                    serialPutchar(fd, '\x02');
-
-                    switch(lookup_map[i].bytes) {
-
-                        case 1:
-			                printf("<< <UART> MSG_SET_8_8: %0.2X, %0.2X\r\n", (uint8_t)lookup_map[i].address, (uint8_t)( atof(message->payload) / lookup_map[i].multiplier  ) ); fflush(NULL);
-		                    serialPrintf( fd, "%0.2X:%0.2X,%0.2X", (uint8_t)MSG_SET_8_8, (uint8_t)lookup_map[i].address, (uint8_t)( atof(message->payload) / lookup_map[i].multiplier ) );
-                        break;
-
-                        case 2:
-		           		    printf("<< <UART> MSG_SET_8_16: %0.2X, %0.4X\r\n", (uint8_t)lookup_map[i].address, (uint16_t)( atof(message->payload) / lookup_map[i].multiplier ) ); fflush(NULL);
-                            serialPrintf( fd, "%0.2X:%0.2X,%0.4X", (uint8_t)MSG_SET_8_16, (uint8_t)lookup_map[i].address, (uint16_t)( atof(message->payload) / lookup_map[i].multiplier ) );
-                        break;
-
-//                        case 3:
-//		                      serialPrintf( fd, "0.2X:%0.2X,%0.6X", (uint8_t)MSG_SET_8_24, (uint8_t)lookup_map[i].address, (uint32_t)(atoi(message->payload)) );
-//                        break;
-
-                        case 4:
-			                printf("<< <UART> MSG_SET_8_32: %0.2X, %0.8lX\r\n", (uint8_t)lookup_map[i].address, (uint32_t)( atof(message->payload) / lookup_map[i].multiplier ) ); fflush(NULL);
-		                    serialPrintf( fd, "%0.2X:%0.2X,%0.8lX", (uint8_t)MSG_SET_8_32, (uint8_t)lookup_map[i].address, (uint32_t)( atof(message->payload) / lookup_map[i].multiplier ) );
-                        break;
-                    }
-
-                    serialPutchar(fd, '\x03');
-
-                }
             }
         }
     }
@@ -581,22 +587,22 @@ void message_callback(struct mosquitto *mosq, void *obj, const struct mosquitto_
         topic[newlen] = '\0';
         //printf("Stripped Topic: %s\r\n", topic);
 
-        if( (i = TopicToAddress(topic)) >= 0) {
-            printf("GET matched topic: %d, %s\r\n", i, lookup_map[i].topic);
-            if( (lookup_map[i].readable == 1) && (lookup_map[i].bytes > 0) ) {
+        if( (node = FindInterface(interface_root, topic, 0)) != NULL ) {
+            //printf("GET matched topic: %d, %s\r\n", i, node->interface->);
+            if( (node->interface->access_mask & AM_WRITE) && (node->interface->bytes > 0) ) {
 
                 serialPutchar(fd, '\x02');
 
-                switch(lookup_map[i].bytes) {
+                switch(node->interface->bytes) {
 
                     case 1:
-                        printf("<< <UART> MSG_GET_8_8: %0.2X\r\n", (uint8_t)lookup_map[i].address ); fflush(NULL);
-		                serialPrintf( fd, "%0.2X:%0.2X", (uint8_t)MSG_GET_8_8, (uint8_t)lookup_map[i].address );
+                        printf("<< <UART> MSG_GET_8_8: %0.2X\r\n", (uint8_t)node->interface->address ); fflush(NULL);
+		                serialPrintf( fd, "%0.2X:%0.2X", (uint8_t)MSG_GET_8_8, (uint8_t)node->interface->address );
                     break;
 
                     case 2:
-		           	    printf("<< <UART> MSG_GET_8_16: %0.2X\r\n", (uint8_t)lookup_map[i].address ); fflush(NULL);
-                        serialPrintf( fd, "%0.2X:%0.2X", (uint8_t)MSG_GET_8_16, (uint8_t)lookup_map[i].address );
+		           	    printf("<< <UART> MSG_GET_8_16: %0.2X\r\n", (uint8_t)node->interface->address ); fflush(NULL);
+                        serialPrintf( fd, "%0.2X:%0.2X", (uint8_t)MSG_GET_8_16, (uint8_t)node->interface->address );
                     break;
 
 //                    case 3:
@@ -604,12 +610,12 @@ void message_callback(struct mosquitto *mosq, void *obj, const struct mosquitto_
 //                    break;
 
                     case 4:
-			            printf("<< <UART> MSG_GET_8_32: %0.2X\r\n", (uint8_t)lookup_map[i].address ); fflush(NULL);
-		                serialPrintf( fd, "%0.2X:%0.2X", (uint8_t)MSG_GET_8_32, (uint8_t)lookup_map[i].address );
+			            printf("<< <UART> MSG_GET_8_32: %0.2X\r\n", (uint8_t)node->interface->address ); fflush(NULL);
+		                serialPrintf( fd, "%0.2X:%0.2X", (uint8_t)MSG_GET_8_32, (uint8_t)node->interface->address );
                     break;
 
                     default:
-                        fprintf(stderr, "Unhandled number of bytes (%d) in %s", lookup_map[i].bytes, lookup_map[i].topic);
+                        fprintf(stderr, "Unhandled number of bytes (%d) in %s", node->interface->bytes, node->interface->name);
                 }
 
                 serialPutchar(fd, '\x03');
@@ -623,6 +629,14 @@ void *ProcessSunrise(void *param) {
     while(running) {
 
     }
+}
+
+// Sends a message to the device requesting that it output all of its available interfaces
+void RequestInterfaces(void) {
+    serialPutchar(fd, '\x02');
+    printf("<< <UART> MSG_GET_INTERFACE\r\n"); fflush(NULL);
+    serialPrintf( fd, "%0.2X", (uint8_t)MSG_GET_INTERFACE );
+    serialPutchar(fd, '\x03');
 }
 
 int main (int argc, char** argv) {
@@ -680,6 +694,8 @@ int main (int argc, char** argv) {
     pthread_create(&process_sunrise, NULL, ProcessSunrise, NULL);
 
 	sd_notify (0, "READY=1");
+
+    RequestInterfaces();
 
 	while(running) {
 		sleep(5);
