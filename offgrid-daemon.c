@@ -28,6 +28,7 @@
 //static char doc[] = "Offgrid hardware daemon -- UART to MQTT bridge";
 
 void ParseMessage(char *msg_buf);
+void ParseMessage2(const char *msg_buf);
 void PublishRequestReturn(unsigned int address, long data);
 void LogToDatabase(const char *topic, const long data, const uint64_t now);
 
@@ -87,37 +88,48 @@ const char *DB_FILENAME = "/usr/local/lib/mqtt.db";
 /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 
-
-
-struct Node* AddInterface(struct Node *node, struct Interface *interface) {
-
+void FreeInterfaces(struct Node *node) {
     if(node == NULL) {
-        node = (struct Node*)malloc(sizeof(struct Node));
-        node->next = NULL;
-        node->interface = interface;
-    }
-    else {
-        node->next = AddInterface(node->next, interface);
+        return;
     }
 
-    return node;
+    FreeInterfaces(node->next);
+
+    if(node->interface != NULL) {
+        printf("Free interface: %s\r\n", node->interface->name); fflush(NULL);
+        free(node->interface);
+    }
+    free(node);
+}
+
+void AddInterface(struct Node **node, struct Interface *interface) {
+    struct Node *new_node;
+
+    new_node = (struct Node*)malloc(sizeof(struct Node));
+    new_node->interface = interface;
+    new_node->next = (*node);
+    (*node) = new_node;
+
+    //printf("AddInterface: %s\r\n", node->interface->name);
 }
 
 // Search for topic by name or address (but not both!)
 struct Node* FindInterface(struct Node *node, char *name, uint16_t address) {
-    if( node != NULL ) {
-        while (node->next != NULL) {
-            if( node->interface !=  NULL ) {
-                if(  ( name != NULL ) && ( !strcmp(node->interface->name, name) )  ) {
-                    return node;
-                }
-                else if(  ( address != 0 ) && ( node->interface->address == address)  ) {
-                    return node;
-                }
-            }
+    struct Node *current = node;
 
-            node = node->next;
+    while (current != NULL) {
+        if( current->interface !=  NULL ) {
+            if(  ( name != NULL ) && ( !strcmp(current->interface->name, name) )  ) {
+                printf("FindInterface: %s ==> address %0.4X\r\n", name, current->interface->address);
+                return current;
+            }
+            else if(  ( address != 0 ) && ( current->interface->address == address)  ) {
+                printf("FindInterface: address %0.4X ==> %s\r\n", address, current->interface->name);
+                return current;
+            }
         }
+
+        current = current->next;
     }
 
     return NULL;
@@ -135,6 +147,11 @@ struct Interface * NewInterface(uint16_t address, uint8_t bytes, int8_t exponent
         interface->access_mask = access_mask;
         strcpy(interface->name, name);
         strcpy(interface->unit, unit);
+
+        //printf("NewInterface(): %0.4x, %d, %d, %d, %s, %s\r\n", address, bytes, exponent, access_mask, name, unit); fflush(NULL);
+    }
+    else {
+        printf("Could not allocate memory for new interface\r\n"); fflush(NULL);
     }
 
     return interface;
@@ -146,13 +163,10 @@ void MakeFormatString(char *fmt, int8_t exponent) {
         fmt = "%0.0f";
     }
     else {
-        fmt = "%0.";
-        while(exponent < -1) {
-            strcat(fmt, "0");
-            exponent++;
-        }
-        strcat(fmt, "1f");
+        sprintf(fmt, "%%0.%df", abs(exponent));
     }
+
+    printf("MakeFormatString(): \"%s\"\r\n", fmt);
 }
 
 // Returns epoch time in whole centiseconds (seconds * 0.01)
@@ -203,7 +217,7 @@ void *ProcessReceiveThread(void *param) {
 					}
 					else if( c == '\x03' ) {
 						////Serial.println("<ETX>");
-						ParseMessage(message_buffer);
+						ParseMessage2(message_buffer);
 						receive_state = GET_STX;
 					}
 					else if( c == '\x02' ) {
@@ -239,6 +253,103 @@ unsigned int asciiHexToInt(char ch) {
   return num;
 }
 
+// TODO: Add trimming white space from beginning and end of arguments
+void ParseMessage2(const char *msg_buf) {
+    unsigned int arg_count = 0;
+    char sep;
+    const char *a;
+    const char *b;
+    char arg[16][255];
+
+    if ( (msg_buf == NULL) || (msg_buf == '\0') ) {
+        return;
+    }
+
+    a = msg_buf;
+    b = msg_buf;
+
+    while ( *b != '\0' ) {
+        sep = (arg_count == 0) ? ':' : ','; // First time through separator is colon, the rest a comma
+
+        while( (*b != sep) && (*b != '\0') ) { b++; } // Advance end pointer to next separator
+
+        strncpy(arg[arg_count], a, b - a);
+        arg[arg_count][b-a] = '\0';
+
+        arg_count++;
+
+        if ( *b == '\0' ) {
+            break;
+        }
+        else {
+            b++; // One past separator
+            a = b;
+        }
+    };
+
+    // DEBUG
+    //for( unsigned int i = 0; i < arg_count; i++ ) {
+    //    printf("{%d} %s | ", i, arg[i]);
+    //}
+    //printf("\r\n");
+    // DEBUG
+
+    // ====== Now do something with the message and arguments  ======
+
+    // NOTE: Message is included in arg_count, stored in arg[0]!
+    switch( (uint8_t)strtoul(arg[0], NULL, 16) ) {
+
+//    	case MSG_KEEP_ALIVE: // Sent by system master (or designate) to ensure bus is operating.  This module will be automatically reset by the watchdog timer if not received in time.
+//    		if(arg_count == 2) {
+//    			//DEBUG//printf(">> <UART> MSG_KEEP_ALIVE: %0.2X\r\n", (uint8_t)arg[0]); fflush(NULL);
+//    			mosquitto_publish(mqtt, NULL, "og/status/tick", 0, "", 0, false);
+//    	        //DEBUG//printf("<< <MQTT> %s = %s\r\n", "og/status/tick", ""); fflush(NULL);
+//    		}
+//    	break;
+
+    	case MSG_GET_SET_ERROR:
+    		if(arg_count == 2) {
+    			printf(">> <UART> MSG_GET_SET_ERROR: %0.2X\r\n", (uint8_t)strtoul(arg[1], NULL, 16)); fflush(NULL);
+    		}
+    	break;
+
+    	case MSG_RETURN_8_8:
+    		if(arg_count == 3) {
+    			//DEBUG//printf(">> <UART> MSG_RETURN_8_8: %0.2X, %0.2X\r\n", (uint8_t)arg[0], (uint8_t)arg[1]); fflush(NULL);
+    			PublishRequestReturn( (uint8_t)strtoul(arg[1], NULL, 16), (int8_t)strtol(arg[2], NULL, 16) );
+    		}
+    	break;
+
+    	case MSG_RETURN_8_16:
+    		if(arg_count == 3) {
+    			//DEBUG//printf(">> <UART> MSG_RETURN_8_16: %0.2X, %0.4X\r\n", (uint8_t)arg[0], (uint16_t)arg[1]); fflush(NULL);
+    			PublishRequestReturn( (uint8_t)strtoul(arg[1], NULL, 16), (int16_t)strtol(arg[2], NULL, 16) );
+    		}
+    	break;
+
+    	case MSG_RETURN_8_32:
+    		if(arg_count == 3) {
+    			//DEBUG//printf(">> <UART> MSG_RETURN_8_32: %0.2X, %0.8lX\r\n", (uint8_t)arg[0], (uint32_t)arg[1]); fflush(NULL);
+    			PublishRequestReturn( (uint8_t)strtoul(arg[1], NULL, 16), (uint32_t)strtoull(arg[2], NULL, 16) );
+    		}
+    	break;
+
+        case MSG_RETURN_INTERFACE:
+            if(arg_count == 7) {
+                // Trim first and last characters of string (that really should be the double quotes)
+                unsigned int len;
+                if(  ( len = strlen(arg[5]) ) >= 2 ) { memmove(arg[5], arg[5]+1, len-2); *(arg[5]+len-2) = '\0'; }
+                if(  ( len = strlen(arg[6]) ) >= 2 ) { memmove(arg[6], arg[6]+1, len-2); *(arg[6]+len-2) = '\0'; }
+
+                //TODO: Prevent the addition of a duplicate
+                AddInterface( &interface_root, NewInterface((uint16_t)strtoul(arg[1], NULL, 16), (uint8_t)strtoul(arg[2], NULL, 16), (int8_t)strtol(arg[3], NULL, 16), (uint8_t)strtoul(arg[4], NULL, 16), arg[5], arg[6]) );
+            }
+        break;
+
+    }
+
+}
+
 void ParseMessage(char *msg_buf) {
   char *p = msg_buf;
   uint8_t count = 0;
@@ -248,7 +359,7 @@ void ParseMessage(char *msg_buf) {
 
   // LIMITED EMBEDDED IMPLEMENTATION
   //   One address and up to four 32-bit parameters will be accepted.  The remainder will be discarded silently.
-  uint32_t arg[4] = {0};
+  uint32_t arg[16] = {0};
   uint8_t arg_count = 0;
 
   // Message to be composed of only PRINTABLE ASCII - isprint() !
@@ -323,7 +434,6 @@ void ParseMessage(char *msg_buf) {
             arg_count++;
 
             if( arg_count > ( sizeof(arg) / sizeof(arg[0]) ) ) {
-              // ERROR: IMPOSED ARBITRARY EMBEDDED LIMITATION
               invalid_message = true;
               break;
             }
@@ -340,9 +450,11 @@ void ParseMessage(char *msg_buf) {
             break;
           }
         }
-//        else if (*p == '"') {
-//          // get everything up to comma or end of string
-//        }
+        else if (*p == '"') {
+          // get everything up to comma or end of string
+          printf("ParseMessage: Found start of string\r\n"); fflush(NULL);
+          invalid_message = true;
+        }
         else {
           // ERROR - invalid contents
           invalid_message = true;
@@ -407,13 +519,13 @@ void ParseMessage(char *msg_buf) {
     case MSG_RETURN_INTERFACE:
         if(arg_count == 5) {
             printf("MSG_RETURN_INTERFACE: CODE STUB\r\n"); fflush(NULL);
-            AddInterface( interface_root, NewInterface((uint16_t)arg[0], (uint8_t)arg[1], (int8_t)arg[2], (uint8_t)arg[3], "", "") ); // FIXME: INCOMPLETE
+            AddInterface( &interface_root, NewInterface((uint16_t)arg[0], (uint8_t)arg[1], (int8_t)arg[2], (uint8_t)arg[3], "", "") ); // FIXME: INCOMPLETE
         }
     }
 
   }
   else {
-    //DEBUG//Serial.println("  <-- INVALID");
+    printf(">> <UART> INVALID MESSAGE\r\n"); fflush(NULL);
   }
 }
 
@@ -439,13 +551,18 @@ void PublishRequestReturn(unsigned int address, long data) {
     struct Interface *interface;
     char fmt[15];
 
+    printf("PublishRequestReturn(): %0.4X, %d\r\n", address, data);
+
     if( (node = FindInterface(interface_root, NULL, address)) != NULL ) {
+        printf("PublishRequestReturn(): address %0.4X found\r\n", address); fflush(NULL);
+
         interface = node->interface;
 
         now = timestamp();
         MakeFormatString(fmt, interface->exponent),
-        payloadlen = sprintf( payload, fmt,  data * pow(10, interface->exponent) ) + 1;
-        //DEBUG//printf("<< <MQTT> %s = %s\r\n", lookup_map[i].topic, payload); fflush(NULL);
+        payloadlen = sprintf( payload, fmt,  (double)data * pow(10, interface->exponent) ) + 1;
+
+        printf("<< <MQTT> %s = %s\r\n", interface->name, payload); fflush(NULL);
 
         mosquitto_publish(mqtt, NULL, interface->name, payloadlen, payload, 0, false);
 
@@ -456,6 +573,9 @@ void PublishRequestReturn(unsigned int address, long data) {
             interface->data_timestamp = now;
             interface->data = data;
         }
+    }
+    else {
+        printf("PublishRequestReturn(): address %0.4X NOT found\r\n", address); fflush(NULL);
     }
 }
 
@@ -704,6 +824,8 @@ int main (int argc, char** argv) {
 
 
     // CLEANUP CODE ONLY BEYOND THIS POINT
+
+    FreeInterfaces(interface_root);
 
 	printf("Waiting for threads to terminate...\r\n"); fflush(NULL);
 	pthread_join(process_rx_thread, NULL);
