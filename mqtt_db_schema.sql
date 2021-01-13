@@ -1,6 +1,7 @@
 CREATE TABLE topic (
     id INTEGER PRIMARY KEY NOT NULL,
-    name TEXT NOT NULL
+    name TEXT NOT NULL,
+    exponent INTEGER NOT NULL
 );
 
 CREATE TABLE message (
@@ -31,5 +32,5 @@ INSERT INTO topic (name) VALUES
     ( 'og/house/battery/amps' ),
     ( 'og/house/fuse_panel/amps' ),
     ( 'og/house/vehicle_in/amps' ),
-    ( 'og/house/inverter/amps' ) 
+    ( 'og/house/inverter/amps' )
 ;
