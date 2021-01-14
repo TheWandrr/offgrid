@@ -1,12 +1,13 @@
-CREATE TABLE topic (
+CREATE TABLE interface (
     id INTEGER PRIMARY KEY NOT NULL,
-    name TEXT NOT NULL,
+    name TEXT NOT NULL UNIQUE,
+    unit TEXT NOT NULL,
     exponent INTEGER NOT NULL
 );
 
 CREATE TABLE message (
     payload INTEGER,
     timestamp INTEGER NOT NULL,
-    topic_id INTEGER NOT NULL,
-    FOREIGN KEY(topic_id) REFERENCES topic(id)
+    interface_id INTEGER NOT NULL,
+    FOREIGN KEY(interface_id) REFERENCES interface(id)
 );

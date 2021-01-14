@@ -20,7 +20,6 @@
 #include "offgrid_constants.h"
 
 // TODO: Implement control over how much information is output to logs
-// TODO: Make software battery monitor process optional with switch
 
 //const char *argp_program_version = "offgrid-daemon 0.0.1";
 //const char *argp_program_bug_address = "";
@@ -79,7 +78,7 @@ int fd;
 static char message_buffer[1023] = {0};
 
 sqlite3 *db;
-const char *DB_FILENAME = "/usr/local/lib/mqtt.db";
+const char *DB_FILENAME = "/usr/local/lib/mqtt.db"; // TODO: Make this configurable via config file and/or command line
 
 
 
@@ -109,21 +108,21 @@ void AddInterface(struct Node **node, struct Interface *interface) {
     new_node->next = (*node);
     (*node) = new_node;
 
-    //printf("AddInterface: %s\r\n", node->interface->name);
+    //DEBUG//printf("AddInterface: %s\r\n", node->interface->name);
 }
 
 // Search for topic by name or address (but not both!)
-struct Node* FindInterface(struct Node *node, char *name, uint16_t address) {
+struct Node* FindInterface(struct Node *node, const char *name, uint16_t address) {
     struct Node *current = node;
 
     while (current != NULL) {
         if( current->interface !=  NULL ) {
             if(  ( name != NULL ) && ( !strcmp(current->interface->name, name) )  ) {
-                printf("FindInterface: %s ==> address %0.4X\r\n", name, current->interface->address);
+                //DEBUG//printf("FindInterface: %s ==> address %0.4X\r\n", name, current->interface->address);
                 return current;
             }
             else if(  ( address != 0 ) && ( current->interface->address == address)  ) {
-                printf("FindInterface: address %0.4X ==> %s\r\n", address, current->interface->name);
+                //DEBUG//printf("FindInterface: address %0.4X ==> %s\r\n", address, current->interface->name);
                 return current;
             }
         }
@@ -369,10 +368,10 @@ void PublishRequestReturn(unsigned int address, long data) {
     struct Interface *interface;
     char fmt[15];
 
-    printf("PublishRequestReturn(): %0.4X, %d\r\n", address, data);
+    //DEBUG//printf("PublishRequestReturn(): %0.4X, %d\r\n", address, data);
 
     if( (node = FindInterface(interface_root, NULL, address)) != NULL ) {
-        printf("PublishRequestReturn(): address %0.4X found\r\n", address); fflush(NULL);
+        //DEBUG//printf("PublishRequestReturn(): address %0.4X found\r\n", address); fflush(NULL);
 
         interface = node->interface;
 
@@ -380,7 +379,7 @@ void PublishRequestReturn(unsigned int address, long data) {
         MakeFormatString(fmt, interface->exponent),
         payloadlen = sprintf( payload, fmt,  (double)data * pow(10, interface->exponent) ) + 1;
 
-        printf("<< <MQTT> %s = %s\r\n", interface->name, payload); fflush(NULL);
+        //DEBUG//printf("<PUT-MQTT> %s = %s\r\n", interface->name, payload); fflush(NULL);
 
         mosquitto_publish(mqtt, NULL, interface->name, payloadlen, payload, 0, false);
 
@@ -393,7 +392,8 @@ void PublishRequestReturn(unsigned int address, long data) {
         }
     }
     else {
-        printf("PublishRequestReturn(): address %0.4X NOT found\r\n", address); fflush(NULL);
+        // Silently ignore if we don't have an interface for this.  Could maybe re-query the device, but seems liek a waste.
+        //DEBUG//printf("PublishRequestReturn(): address %0.4X NOT found\r\n", address); fflush(NULL);
     }
 }
 
@@ -411,10 +411,84 @@ void LogToDatabase(const char *topic, const long data, const uint64_t now) {
     int rc;
     sqlite3_stmt *stmt;
     int row_count;
+    struct Node *node;
+    bool failed;
+
+    failed = false;
 
     // TODO: Look up topic.  If it doesn't exist, add it before inserting the message.
+    if( (node = FindInterface(interface_root, topic, 0)) != NULL ) {
+//        if( sqlite3_prepare_v2(db, "SELECT name, unit, exponent FROM interface WHERE name = ?1 AND unit = ?2 AND expoent = ?3 LIMIT 1;", -1, &stmt, NULL) == SQLITE_OK ) {
+//            if(   (  ( sqlite3_bind_text(stmt, 1, node->interface->name, -1, SQLITE_TRANSIENT) ) == SQLITE_OK  ) &&
+//                  (  ( sqlite3_bind_text(stmt, 2, node->interface->unit, -1, SQLITE_TRANSIENT) ) == SQLITE_OK  ) &&
+//                  (  ( sqlite3_bind_int(stmt, 3, node->interface->exponent, -1, SQLITE_TRANSIENT) ) == SQLITE_OK  )   )
+//            {
+//                if ( sqlite3_step(stmt) == SQLITE_DONE ) { // Query executed successfully but returned no results
+//                    sqlite3_finalize(stmt);
 
-    if( sqlite3_prepare_v2(db, "INSERT INTO message(payload,timestamp,topic_id) VALUES(?1,?2,(SELECT id FROM topic WHERE name=?3));", -1, &stmt, NULL) ) {
+                    // Add the new interface
+                    if( sqlite3_prepare_v2(db, "INSERT OR IGNORE INTO interface (name,unit,exponent) VALUES(?1,?2,?3);", -1, &stmt, NULL) == SQLITE_OK ) {
+                        if(   (  ( sqlite3_bind_text(stmt, 1, node->interface->name, -1, SQLITE_TRANSIENT) ) == SQLITE_OK  ) &&
+                              (  ( sqlite3_bind_text(stmt, 2, node->interface->unit, -1, SQLITE_TRANSIENT) ) == SQLITE_OK  ) &&
+                              (  ( sqlite3_bind_int(stmt, 3, node->interface->exponent) ) == SQLITE_OK  )   )
+                        {
+                            if ( sqlite3_step(stmt) == SQLITE_DONE ) {
+                                // Successfully added new row for interface
+                                // Note: If the "IGNORE" is executed, it still succeeds and we don't know when this gets added or not.  But it does seem to work.
+                                //DEBUG//printf("Added new interface to database: %s, %s, %d\r\n", node->interface->name, node->interface->unit, node->interface->exponent);
+                            }
+                            else {
+                                fprintf(stderr, "Failed to execute INSERT statement: %s\n", sqlite3_errmsg(db));
+                                failed = true;
+                            }
+                        }
+                        else {
+                            fprintf(stderr, "Failed to bind INSERT arguments: %s\n", sqlite3_errmsg(db));
+                            failed = true;
+                        }
+                    }
+                    else {
+                        fprintf(stderr, "Failed to prepare INSERT statement: %s\n", sqlite3_errmsg(db));
+                        failed = true;
+                    }
+//                }
+//                else {
+//                    fprintf(stderr, "Failed to execute SELECT statement: %s\n", sqlite3_errmsg(db));
+//                    failed = TRUE;
+//                }
+//            }
+//            else {
+//                fprintf(stderr, "Failed to bind SELECT arguments: %s\n", sqlite3_errmsg(db));
+//                failed = TRUE;
+//            }
+//        }
+//        else {
+//            fprintf(stderr, "Failed to prepare SELECT statement: %s\n", sqlite3_errmsg(db));
+//            failed = TRUE;
+//        }
+
+        if(failed) {
+            fprintf(stderr, "Error while finding or creating interface in database\n");
+            return;
+        }
+    }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    if( sqlite3_prepare_v2(db, "INSERT INTO message(payload,timestamp,interface_id) VALUES(?1,?2,(SELECT id FROM interface WHERE name=?3));", -1, &stmt, NULL) ) {
         fprintf(stderr, "Failed to prepare statement: %s\n", sqlite3_errmsg(db));
         return;
     }
@@ -467,7 +541,7 @@ void message_callback(struct mosquitto *mosq, void *obj, const struct mosquitto_
 	int payloadlen;
     struct Node *node;
 
-	//DEBUG//printf(">> <MQTT> %s = %s\r\n", message->topic, message->payload); fflush(NULL);
+	//DEBUG//printf("<GET-MQTT> %s = %s\r\n", message->topic, message->payload); fflush(NULL);
 
     // *** If message ends with "/set", it needs to be handled differently
     if( StringHasSuffix(message->topic, suffix_set) ) {
@@ -491,12 +565,12 @@ void message_callback(struct mosquitto *mosq, void *obj, const struct mosquitto_
                 switch(node->interface->bytes) {
 
                     case 1:
-		                printf("<< <UART> MSG_SET_8_8: %0.2X, %0.2X\r\n", (uint8_t)node->interface->address, (uint8_t)( atof(message->payload) / pow(10, node->interface->exponent) ) ); fflush(NULL);
+		                //DEBUG//printf("<< <UART> MSG_SET_8_8: %0.2X, %0.2X\r\n", (uint8_t)node->interface->address, (uint8_t)( atof(message->payload) / pow(10, node->interface->exponent) ) ); fflush(NULL);
 	                    serialPrintf( fd, "%0.2X:%0.2X,%0.2X", (uint8_t)MSG_SET_8_8, (uint8_t)node->interface->address, (uint8_t)( atof(message->payload) / pow(10, node->interface->exponent) ) );
                     break;
 
                     case 2:
-           		        printf("<< <UART> MSG_SET_8_16: %0.2X, %0.4X\r\n", (uint8_t)node->interface->address, (uint16_t)( atof(message->payload) / pow(10, node->interface->exponent) ) ); fflush(NULL);
+           		        //DEBUG//printf("<< <UART> MSG_SET_8_16: %0.2X, %0.4X\r\n", (uint8_t)node->interface->address, (uint16_t)( atof(message->payload) / pow(10, node->interface->exponent) ) ); fflush(NULL);
                         serialPrintf( fd, "%0.2X:%0.2X,%0.4X", (uint8_t)MSG_SET_8_16, (uint8_t)node->interface->address, (uint16_t)( atof(message->payload) / pow(10, node->interface->exponent) ) );
                     break;
 
@@ -505,9 +579,12 @@ void message_callback(struct mosquitto *mosq, void *obj, const struct mosquitto_
 //                    break;
 
                     case 4:
-		                printf("<< <UART> MSG_SET_8_32: %0.2X, %0.8lX\r\n", (uint8_t)node->interface->address, (uint32_t)( atof(message->payload) / pow(10, node->interface->exponent) ) ); fflush(NULL);
+		                //DEBUG//printf("<< <UART> MSG_SET_8_32: %0.2X, %0.8lX\r\n", (uint8_t)node->interface->address, (uint32_t)( atof(message->payload) / pow(10, node->interface->exponent) ) ); fflush(NULL);
 	                    serialPrintf( fd, "%0.2X:%0.2X,%0.8lX", (uint8_t)MSG_SET_8_32, (uint8_t)node->interface->address, (uint32_t)( atof(message->payload) / pow(10, node->interface->exponent) ) );
                     break;
+
+                    default:
+                        fprintf(stderr, "Unhandled number of bytes (%d) in %s", node->interface->bytes, node->interface->name);
                 }
 
                 serialPutchar(fd, '\x03');
@@ -534,12 +611,12 @@ void message_callback(struct mosquitto *mosq, void *obj, const struct mosquitto_
                 switch(node->interface->bytes) {
 
                     case 1:
-                        printf("<< <UART> MSG_GET_8_8: %0.2X\r\n", (uint8_t)node->interface->address ); fflush(NULL);
+                        //DEBUG//printf("<< <UART> MSG_GET_8_8: %0.2X\r\n", (uint8_t)node->interface->address ); fflush(NULL);
 		                serialPrintf( fd, "%0.2X:%0.2X", (uint8_t)MSG_GET_8_8, (uint8_t)node->interface->address );
                     break;
 
                     case 2:
-		           	    printf("<< <UART> MSG_GET_8_16: %0.2X\r\n", (uint8_t)node->interface->address ); fflush(NULL);
+		           	    //DEBUG//printf("<< <UART> MSG_GET_8_16: %0.2X\r\n", (uint8_t)node->interface->address ); fflush(NULL);
                         serialPrintf( fd, "%0.2X:%0.2X", (uint8_t)MSG_GET_8_16, (uint8_t)node->interface->address );
                     break;
 
@@ -548,7 +625,7 @@ void message_callback(struct mosquitto *mosq, void *obj, const struct mosquitto_
 //                    break;
 
                     case 4:
-			            printf("<< <UART> MSG_GET_8_32: %0.2X\r\n", (uint8_t)node->interface->address ); fflush(NULL);
+			            //DEBUG//printf("<< <UART> MSG_GET_8_32: %0.2X\r\n", (uint8_t)node->interface->address ); fflush(NULL);
 		                serialPrintf( fd, "%0.2X:%0.2X", (uint8_t)MSG_GET_8_32, (uint8_t)node->interface->address );
                     break;
 
