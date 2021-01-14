@@ -27,8 +27,7 @@
 
 //static char doc[] = "Offgrid hardware daemon -- UART to MQTT bridge";
 
-void ParseMessage(char *msg_buf);
-void ParseMessage2(const char *msg_buf);
+void ParseMessage(const char *msg_buf);
 void PublishRequestReturn(unsigned int address, long data);
 void LogToDatabase(const char *topic, const long data, const uint64_t now);
 
@@ -166,7 +165,7 @@ void MakeFormatString(char *fmt, int8_t exponent) {
         sprintf(fmt, "%%0.%df", abs(exponent));
     }
 
-    printf("MakeFormatString(): \"%s\"\r\n", fmt);
+    //printf("MakeFormatString(): \"%s\"\r\n", fmt);
 }
 
 // Returns epoch time in whole centiseconds (seconds * 0.01)
@@ -217,7 +216,7 @@ void *ProcessReceiveThread(void *param) {
 					}
 					else if( c == '\x03' ) {
 						////Serial.println("<ETX>");
-						ParseMessage2(message_buffer);
+						ParseMessage(message_buffer);
 						receive_state = GET_STX;
 					}
 					else if( c == '\x02' ) {
@@ -254,7 +253,7 @@ unsigned int asciiHexToInt(char ch) {
 }
 
 // TODO: Add trimming white space from beginning and end of arguments
-void ParseMessage2(const char *msg_buf) {
+void ParseMessage(const char *msg_buf) {
     unsigned int arg_count = 0;
     char sep;
     const char *a;
@@ -265,6 +264,7 @@ void ParseMessage2(const char *msg_buf) {
         return;
     }
 
+    // Move through the string with two pointers, locating the start and end of each token
     a = msg_buf;
     b = msg_buf;
 
@@ -315,21 +315,18 @@ void ParseMessage2(const char *msg_buf) {
 
     	case MSG_RETURN_8_8:
     		if(arg_count == 3) {
-    			//DEBUG//printf(">> <UART> MSG_RETURN_8_8: %0.2X, %0.2X\r\n", (uint8_t)arg[0], (uint8_t)arg[1]); fflush(NULL);
     			PublishRequestReturn( (uint8_t)strtoul(arg[1], NULL, 16), (int8_t)strtol(arg[2], NULL, 16) );
     		}
     	break;
 
     	case MSG_RETURN_8_16:
     		if(arg_count == 3) {
-    			//DEBUG//printf(">> <UART> MSG_RETURN_8_16: %0.2X, %0.4X\r\n", (uint8_t)arg[0], (uint16_t)arg[1]); fflush(NULL);
     			PublishRequestReturn( (uint8_t)strtoul(arg[1], NULL, 16), (int16_t)strtol(arg[2], NULL, 16) );
     		}
     	break;
 
     	case MSG_RETURN_8_32:
     		if(arg_count == 3) {
-    			//DEBUG//printf(">> <UART> MSG_RETURN_8_32: %0.2X, %0.8lX\r\n", (uint8_t)arg[0], (uint32_t)arg[1]); fflush(NULL);
     			PublishRequestReturn( (uint8_t)strtoul(arg[1], NULL, 16), (uint32_t)strtoull(arg[2], NULL, 16) );
     		}
     	break;
@@ -348,185 +345,6 @@ void ParseMessage2(const char *msg_buf) {
 
     }
 
-}
-
-void ParseMessage(char *msg_buf) {
-  char *p = msg_buf;
-  uint8_t count = 0;
-  uint16_t address = 0;
-  uint32_t value_buffer = 0;
-  bool invalid_message = false; // Any invalid message will be ignored.  Reporting anything more isn't useful.
-
-  // LIMITED EMBEDDED IMPLEMENTATION
-  //   One address and up to four 32-bit parameters will be accepted.  The remainder will be discarded silently.
-  uint32_t arg[16] = {0};
-  uint8_t arg_count = 0;
-
-  // Message to be composed of only PRINTABLE ASCII - isprint() !
-  // Message format is addr:XX, XX, ...
-  //   Where a 4-character ASCII-HEX is used for an address
-  //   ... followed by optional colon
-  //   ... followed by a comma-separated list of ASCII-HEX or STRING values of variable length
-  //   ... string values have an additional marker character pre-pended TBD
-
-  //consumeWhitespace(&p); // TODO: Not working
-
-  // Empty message is invalid.  Parsing loop will be skipped.
-  if(*p == '\0') {
-    invalid_message = true;
-  }
-
-  while ( (*p != '\0') && (!invalid_message) ) {
-    // Get up to 4 ASCII-HEX characters for address
-    address = 0;
-    count = 0;
-
-    if( !isxdigit(*p) ) {
-      // ERROR: Address did not start with hex digit
-      invalid_message = true;
-      break;
-    }
-
-    //while ( (*p != '\0') && (*p != ':') && isxdigit(*p) ) {
-    while ( isxdigit(*p) ) {
-      address <<= 4;
-      address += asciiHexToInt(*p);
-
-      count++;
-      p++;
-    }
-
-    //DEBUG//Serial.print('['); Serial.print(address, HEX); Serial.print(']');
-
-    if (count > 4) {
-      // ERROR - address must maximum 4 ASCII-HEX characters
-      invalid_message = true;
-      break;
-    }
-
-    // Colon (continue), end of string (done), else (error)
-    if(*p == ':') {
-      p++; // Consume colon
-
-      // Get list following colon
-      arg_count = 0;
-      do {
-        if(isxdigit(*p)) {
-          // Get ascii-hex digits up to comma or end of string
-          count = 0;
-          value_buffer = 0;
-          while ( isxdigit(*p) ) {
-            value_buffer <<= 4;
-            value_buffer += asciiHexToInt(*p);
-
-            count++;
-            p++;
-          }
-
-          if (count > 8) {
-            // ERROR - max data size is 4 bytes or 8 ascii-hex characters
-            invalid_message = true;
-            break;
-          }
-          else {
-            // Looks like we have good data.  Do something with it before it goes away in the next loop iteration.
-            arg[arg_count] = value_buffer;
-            arg_count++;
-
-            if( arg_count > ( sizeof(arg) / sizeof(arg[0]) ) ) {
-              invalid_message = true;
-              break;
-            }
-          }
-
-          // If we're looking at a the comma following a value, consume it.
-          if (*p == ',') {
-            p++;
-            //DEBUG//Serial.print(';');
-          }
-          else if (*p != '\0') {
-            // ERROR - Only a comma or end of string should follow a value
-            invalid_message = true;
-            break;
-          }
-        }
-        else if (*p == '"') {
-          // get everything up to comma or end of string
-          printf("ParseMessage: Found start of string\r\n"); fflush(NULL);
-          invalid_message = true;
-        }
-        else {
-          // ERROR - invalid contents
-          invalid_message = true;
-          break;
-        }
-      } while (*p != '\0');
-
-      if(invalid_message) {
-        // Something went wrong in the above parsing loop getting the list.  Get out of the outer loop as well.
-        break;
-      }
-
-    }
-    else if (*p != '\0') {
-      // ERROR: Something unexpected followed the address
-      invalid_message = true;
-      break;
-    }
-
-    p++;
-  }
-
-  if ( !invalid_message ) {
-
-    switch(address) {
-
-	case MSG_KEEP_ALIVE: // Sent by system master (or designate) to ensure bus is operating.  This module will be automatically reset by the watchdog timer if not received in time.
-		if(arg_count == 1) {
-			//DEBUG//printf(">> <UART> MSG_KEEP_ALIVE: %0.2X\r\n", (uint8_t)arg[0]); fflush(NULL);
-			mosquitto_publish(mqtt, NULL, "og/status/tick", 0, "", 0, false);
-	        //DEBUG//printf("<< <MQTT> %s = %s\r\n", "og/status/tick", ""); fflush(NULL);
-		}
-	break;
-
-	case MSG_GET_SET_ERROR:
-		if(arg_count == 1) {
-			printf(">> <UART> MSG_GET_SET_ERROR: %0.2X\r\n", (uint8_t)arg[0]); fflush(NULL);
-		}
-	break;
-
-	case MSG_RETURN_8_8:
-		if(arg_count == 2) {
-			//DEBUG//printf(">> <UART> MSG_RETURN_8_8: %0.2X, %0.2X\r\n", (uint8_t)arg[0], (uint8_t)arg[1]); fflush(NULL);
-			PublishRequestReturn( (uint8_t)arg[0], (int8_t)arg[1] );
-		}
-	break;
-
-	case MSG_RETURN_8_16:
-		if(arg_count == 2) {
-			//DEBUG//printf(">> <UART> MSG_RETURN_8_16: %0.2X, %0.4X\r\n", (uint8_t)arg[0], (uint16_t)arg[1]); fflush(NULL);
-			PublishRequestReturn( (uint8_t)arg[0], (int16_t)arg[1] );
-		}
-	break;
-
-	case MSG_RETURN_8_32:
-		if(arg_count == 2) {
-			//DEBUG//printf(">> <UART> MSG_RETURN_8_32: %0.2X, %0.8lX\r\n", (uint8_t)arg[0], (uint32_t)arg[1]); fflush(NULL);
-			PublishRequestReturn( (uint8_t)arg[0], (uint32_t)arg[1] );
-		}
-	break;
-
-    case MSG_RETURN_INTERFACE:
-        if(arg_count == 5) {
-            printf("MSG_RETURN_INTERFACE: CODE STUB\r\n"); fflush(NULL);
-            AddInterface( &interface_root, NewInterface((uint16_t)arg[0], (uint8_t)arg[1], (int8_t)arg[2], (uint8_t)arg[3], "", "") ); // FIXME: INCOMPLETE
-        }
-    }
-
-  }
-  else {
-    printf(">> <UART> INVALID MESSAGE\r\n"); fflush(NULL);
-  }
 }
 
 // Not strictly necessary but will allow control of message sending frequency
