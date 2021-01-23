@@ -377,7 +377,7 @@ void PublishRequestReturn(unsigned int address, long data) {
 
         now = timestamp();
         MakeFormatString(fmt, interface->exponent),
-        payloadlen = sprintf( payload, fmt,  (double)data * pow(10, interface->exponent) ) + 1;
+        payloadlen = sprintf( payload, fmt,  (double)data * pow(10, interface->exponent) );
 
         //DEBUG//printf("<PUT-MQTT> %s = %s\r\n", interface->name, payload); fflush(NULL);
 
