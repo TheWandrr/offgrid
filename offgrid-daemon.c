@@ -671,7 +671,9 @@ int main (int argc, char** argv) {
     }
 
 	// SETUP UART
-    if ((fd = serialOpen ("/dev/ttyS0", 115200)) < 0) {
+    // TODO: This needs to be made into a configuration setting
+//    if ((fd = serialOpen ("/dev/ttyS0", 115200)) < 0) {
+    if ((fd = serialOpen ("/dev/ttyACM0", 115200)) < 0) {
         fprintf (stderr, "Unable to open serial device: %s\n", strerror(errno));
         return 1;
     }
