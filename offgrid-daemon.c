@@ -108,7 +108,7 @@ void AddInterface(struct Node **node, struct Interface *interface) {
     new_node->next = (*node);
     (*node) = new_node;
 
-    //DEBUG//printf("AddInterface: %s\r\n", node->interface->name);
+    printf("Add interface: %s\r\n", (*node)->interface->name); fflush(NULL);
 }
 
 // Search for topic by name or address (but not both!)
@@ -672,12 +672,24 @@ int main (int argc, char** argv) {
 
 	// SETUP UART
     // TODO: This needs to be made into a configuration setting
-//    if ((fd = serialOpen ("/dev/ttyS0", 115200)) < 0) {
-    if ((fd = serialOpen ("/dev/ttyACM0", 115200)) < 0) {
+    // TODO: It seems to change on its own.  Auto detect?
+
+    if ((fd = serialOpen ("/dev/ttyACM0", 115200)) >= 0) {
+        fprintf(stdout, "Connect on /dev/ttyACM0\n");
+    }
+    else if ((fd = serialOpen ("/dev/ttyACM1", 115200)) >= 0) {
+        fprintf(stdout, "Connect on /dev/ttyACM1\n");
+    }
+    else if ((fd = serialOpen ("/dev/ttyS0", 115200)) >= 0) {
+        fprintf(stdout, "Connect on /dev/ttyS0\n");
+    }
+    else if ((fd = serialOpen ("/dev/ttyAMA0", 115200)) >= 0) {
+        fprintf(stdout, "Connect on /dev/ttyAMA0\n");
+    }
+    else {
         fprintf (stderr, "Unable to open serial device: %s\n", strerror(errno));
         return 1;
     }
-
 	// SETUP MQTT
 	mosquitto_lib_init();
 	snprintf(client_id, sizeof(client_id)-1, "offgrid-daemon-%d", getpid());
