@@ -19,6 +19,7 @@
 
 #include "offgrid_constants.h"
 
+// TODO: Improve CPU usage
 // TODO: Implement control over how much information is output to logs
 
 //const char *argp_program_version = "offgrid-daemon 0.0.1";
@@ -228,6 +229,9 @@ void *ProcessReceiveThread(void *param) {
 
 			}
 		}
+        else {
+            usleep(1000);
+        }
 	}
 }
 
@@ -349,9 +353,11 @@ void ParseMessage(const char *msg_buf) {
 // Not strictly necessary but will allow control of message sending frequency
 void *ProcessTransmitThread(void *param) {
 	while(running) {
-		//printf("ProcessTransmitThread()\r\n");
-		//fflush(NULL);
-		//sleep(1);
+        //if(tx_ready) {
+        //}
+        //else {
+        //    usleep(100);
+        //}
 	}
 }
 
@@ -719,7 +725,7 @@ int main (int argc, char** argv) {
 	// SETUP THREADS
     // TODO: Check return code, exit with error if any of these threads can't be created
 	pthread_create(&process_rx_thread, NULL, ProcessReceiveThread, NULL);
-	pthread_create(&process_tx_thread, NULL, ProcessTransmitThread, NULL);
+	//pthread_create(&process_tx_thread, NULL, ProcessTransmitThread, NULL);
     pthread_create(&process_sunrise, NULL, ProcessSunrise, NULL);
 
 	sd_notify (0, "READY=1");
@@ -738,7 +744,7 @@ int main (int argc, char** argv) {
 
 	printf("Waiting for threads to terminate...\r\n"); fflush(NULL);
 	pthread_join(process_rx_thread, NULL);
-	pthread_join(process_tx_thread, NULL);
+	//pthread_join(process_tx_thread, NULL);
     pthread_join(process_sunrise, NULL);
 	printf("...threads terminated\r\n"); fflush(NULL);
 
