@@ -330,7 +330,7 @@ void ParseMessage(const char *msg_buf) {
 
     	case MSG_RETURN_8_32:
     		if(arg_count == 3) {
-    			PublishRequestReturn( (uint8_t)strtoul(arg[1], NULL, 16), (uint32_t)strtoull(arg[2], NULL, 16) );
+    			PublishRequestReturn( (uint8_t)strtoul(arg[1], NULL, 16), (int32_t)strtoll(arg[2], NULL, 16) );
     		}
     	break;
 
