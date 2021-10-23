@@ -267,6 +267,10 @@ void ParseMessage(const char *msg_buf) {
         return;
     }
 
+    // DEBUG //
+    //printf("ParseMessage(\"%s\")\n", msg_buf);
+    // DEBUG //
+
     // Move through the string with two pointers, locating the start and end of each token
     a = msg_buf;
     b = msg_buf;
@@ -374,7 +378,9 @@ void PublishRequestReturn(unsigned int address, long data) {
     struct Interface *interface;
     char fmt[15];
 
-    //DEBUG//printf("PublishRequestReturn(): %0.4X, %d\r\n", address, data);
+    // DEBUG //
+    //printf("PublishRequestReturn(): %0.4X, %d\r\n", address, data);
+    // DEBUG //
 
     if( (node = FindInterface(interface_root, NULL, address)) != NULL ) {
         //DEBUG//printf("PublishRequestReturn(): address %0.4X found\r\n", address); fflush(NULL);
@@ -385,7 +391,9 @@ void PublishRequestReturn(unsigned int address, long data) {
         MakeFormatString(fmt, interface->exponent),
         payloadlen = sprintf( payload, fmt,  (double)data * pow(10, interface->exponent) );
 
-        //DEBUG//printf("<PUT-MQTT> %s = %s\r\n", interface->name, payload); fflush(NULL);
+        // DEBUG //
+        //printf("<PUT-MQTT> %s = %s\r\n", interface->name, payload); fflush(NULL);
+        // DEBUG //
 
         mosquitto_publish(mqtt, NULL, interface->name, payloadlen, payload, 0, false);
 
@@ -572,12 +580,12 @@ void message_callback(struct mosquitto *mosq, void *obj, const struct mosquitto_
 
                     case 1:
 		                //DEBUG//printf("<< <UART> MSG_SET_8_8: %0.2X, %0.2X\r\n", (uint8_t)node->interface->address, (uint8_t)( atof(message->payload) / pow(10, node->interface->exponent) ) ); fflush(NULL);
-	                    serialPrintf( fd, "%0.2X:%0.2X,%0.2X", (uint8_t)MSG_SET_8_8, (uint8_t)node->interface->address, (uint8_t)( atof(message->payload) / pow(10, node->interface->exponent) ) );
+	                    serialPrintf( fd, "%0.2X:%0.2X,%0.2X", (uint8_t)MSG_SET_8_8, (uint8_t)node->interface->address, (int8_t)( atof(message->payload) / pow(10, node->interface->exponent) ) );
                     break;
 
                     case 2:
            		        //DEBUG//printf("<< <UART> MSG_SET_8_16: %0.2X, %0.4X\r\n", (uint8_t)node->interface->address, (uint16_t)( atof(message->payload) / pow(10, node->interface->exponent) ) ); fflush(NULL);
-                        serialPrintf( fd, "%0.2X:%0.2X,%0.4X", (uint8_t)MSG_SET_8_16, (uint8_t)node->interface->address, (uint16_t)( atof(message->payload) / pow(10, node->interface->exponent) ) );
+                        serialPrintf( fd, "%0.2X:%0.2X,%0.4X", (uint8_t)MSG_SET_8_16, (uint8_t)node->interface->address, (int16_t)( atof(message->payload) / pow(10, node->interface->exponent) ) );
                     break;
 
 //                    case 3:
@@ -586,7 +594,7 @@ void message_callback(struct mosquitto *mosq, void *obj, const struct mosquitto_
 
                     case 4:
 		                //DEBUG//printf("<< <UART> MSG_SET_8_32: %0.2X, %0.8lX\r\n", (uint8_t)node->interface->address, (uint32_t)( atof(message->payload) / pow(10, node->interface->exponent) ) ); fflush(NULL);
-	                    serialPrintf( fd, "%0.2X:%0.2X,%0.8lX", (uint8_t)MSG_SET_8_32, (uint8_t)node->interface->address, (uint32_t)( atof(message->payload) / pow(10, node->interface->exponent) ) );
+	                    serialPrintf( fd, "%0.2X:%0.2X,%0.8lX", (uint8_t)MSG_SET_8_32, (uint8_t)node->interface->address, (int32_t)( atof(message->payload) / pow(10, node->interface->exponent) ) );
                     break;
 
                     default:
@@ -618,11 +626,11 @@ void message_callback(struct mosquitto *mosq, void *obj, const struct mosquitto_
 
                     case 1:
                         //DEBUG//printf("<< <UART> MSG_GET_8_8: %0.2X\r\n", (uint8_t)node->interface->address ); fflush(NULL);
-		                serialPrintf( fd, "%0.2X:%0.2X", (uint8_t)MSG_GET_8_8, (uint8_t)node->interface->address );
+		                    serialPrintf( fd, "%0.2X:%0.2X", (uint8_t)MSG_GET_8_8, (uint8_t)node->interface->address );
                     break;
 
                     case 2:
-		           	    //DEBUG//printf("<< <UART> MSG_GET_8_16: %0.2X\r\n", (uint8_t)node->interface->address ); fflush(NULL);
+		           	        //DEBUG//printf("<< <UART> MSG_GET_8_16: %0.2X\r\n", (uint8_t)node->interface->address ); fflush(NULL);
                         serialPrintf( fd, "%0.2X:%0.2X", (uint8_t)MSG_GET_8_16, (uint8_t)node->interface->address );
                     break;
 
@@ -631,8 +639,8 @@ void message_callback(struct mosquitto *mosq, void *obj, const struct mosquitto_
 //                    break;
 
                     case 4:
-			            //DEBUG//printf("<< <UART> MSG_GET_8_32: %0.2X\r\n", (uint8_t)node->interface->address ); fflush(NULL);
-		                serialPrintf( fd, "%0.2X:%0.2X", (uint8_t)MSG_GET_8_32, (uint8_t)node->interface->address );
+			                  //DEBUG//printf("<< <UART> MSG_GET_8_32: %0.2X\r\n", (uint8_t)node->interface->address ); fflush(NULL);
+		                    serialPrintf( fd, "%0.2X:%0.2X", (uint8_t)MSG_GET_8_32, (uint8_t)node->interface->address );
                     break;
 
                     default:

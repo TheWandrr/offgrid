@@ -19,6 +19,8 @@
 #define MSG_RESERVED_10     0x10
 #define MSG_GET_SET_ERROR   0x11
 
+/* All data sent as signed values */
+
 #define MSG_SET_8_8         0x12
 #define MSG_GET_8_8         0x13
 #define MSG_RETURN_8_8      0x14
@@ -27,15 +29,13 @@
 #define MSG_GET_8_16        0x16
 #define MSG_RETURN_8_16     0x17
 
-#define MSG_SET_8_32        0x18
-#define MSG_GET_8_32        0x19
-#define MSG_RETURN_8_32     0x1A
+//#define MSG_SET_8_24        0x18
+//#define MSG_GET_8_24        0x19
+//#define MSG_RETURN_8_24     0x20
 
-#define MSG_RESERVED_1B     0x1B
-#define MSG_RESERVED_1C     0x1C
-#define MSG_RESERVED_1D     0x1D
-#define MSG_RESERVED_1E		0x1E
-#define MSG_RESERVED_1F		0x1F
+#define MSG_SET_8_32        0x21
+#define MSG_GET_8_32        0x22
+#define MSG_RETURN_8_32     0x23
 
 // Fatal error flash codes - make sure none of these are ambiguous when flashing as two hex nybbles
 // 0x0? is acceptable but not 0x?0
