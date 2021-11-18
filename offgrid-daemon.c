@@ -340,6 +340,7 @@ void ParseMessage(const char *msg_buf) {
 
         case MSG_RETURN_INTERFACE:
             if(arg_count == 7) {
+                // TODO: Replace with cleaner quote trimming function
                 // Trim first and last characters of string (that really should be the double quotes)
                 unsigned int len;
                 if(  ( len = strlen(arg[5]) ) >= 2 ) { memmove(arg[5], arg[5]+1, len-2); *(arg[5]+len-2) = '\0'; }
@@ -347,6 +348,16 @@ void ParseMessage(const char *msg_buf) {
 
                 //TODO: Prevent the addition of a duplicate
                 AddInterface( &interface_root, NewInterface((uint16_t)strtoul(arg[1], NULL, 16), (uint8_t)strtoul(arg[2], NULL, 16), (int8_t)strtol(arg[3], NULL, 16), (uint8_t)strtoul(arg[4], NULL, 16), arg[5], arg[6]) );
+            }
+        break;
+
+        case MSG_DEBUG_STRING:
+            if(arg_count == 2) {
+                // Trim first and last characters of string (that really should be the double quotes)
+                unsigned int len;
+                if(  ( len = strlen(arg[1]) ) >= 2 ) { memmove(arg[1], arg[1]+1, len-2); *(arg[1]+len-2) = '\0'; }
+
+                printf("<<< DEBUG >>> %s\n", arg[1]); fflush(NULL);
             }
         break;
 

@@ -7,7 +7,8 @@
 #define MSG_RESERVED_02		0x02
 #define MSG_RESERVED_03		0x03
 #define MSG_RESERVED_04		0x04
-#define MSG_RESERVED_05		0x05
+
+#define MSG_DEBUG_STRING	0x05
 
 #define MSG_KEEP_ALIVE		0x06
 #define MSG_POWER_ON		0x07
