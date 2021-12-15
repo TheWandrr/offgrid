@@ -18,6 +18,7 @@
 //#include <argp.h>
 
 #include "offgrid_constants.h"
+#include "ds18b20.h"
 
 // TODO: Improve CPU usage
 // TODO: Implement control over how much information is output to logs
@@ -69,7 +70,8 @@ struct Node *interface_root = NULL;
 static volatile int running = 1;
 pthread_t process_rx_thread;
 pthread_t process_tx_thread;
-pthread_t process_sunrise;
+pthread_t process_sunrise_thread;
+pthread_t process_local_thread;
 
 struct mosquitto *mqtt;
 const char *mqtt_host = "localhost";
@@ -81,7 +83,9 @@ static char message_buffer[1023] = {0};
 sqlite3 *db;
 const char *DB_FILENAME = "/usr/local/lib/mqtt.db"; // TODO: Make this configurable via config file and/or command line
 
-
+char **sensorNames;
+int sensorNamesCount;
+SensorList *sensorList;
 
 
 /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -443,72 +447,36 @@ void LogToDatabase(const char *topic, const long data, const uint64_t now) {
 
     // TODO: Look up topic.  If it doesn't exist, add it before inserting the message.
     if( (node = FindInterface(interface_root, topic, 0)) != NULL ) {
-//        if( sqlite3_prepare_v2(db, "SELECT name, unit, exponent FROM interface WHERE name = ?1 AND unit = ?2 AND expoent = ?3 LIMIT 1;", -1, &stmt, NULL) == SQLITE_OK ) {
-//            if(   (  ( sqlite3_bind_text(stmt, 1, node->interface->name, -1, SQLITE_TRANSIENT) ) == SQLITE_OK  ) &&
-//                  (  ( sqlite3_bind_text(stmt, 2, node->interface->unit, -1, SQLITE_TRANSIENT) ) == SQLITE_OK  ) &&
-//                  (  ( sqlite3_bind_int(stmt, 3, node->interface->exponent, -1, SQLITE_TRANSIENT) ) == SQLITE_OK  )   )
-//            {
-//                if ( sqlite3_step(stmt) == SQLITE_DONE ) { // Query executed successfully but returned no results
-//                    sqlite3_finalize(stmt);
-
-                    // Add the new interface
-                    if( sqlite3_prepare_v2(db, "INSERT OR IGNORE INTO interface (name,unit,exponent) VALUES(?1,?2,?3);", -1, &stmt, NULL) == SQLITE_OK ) {
-                        if(   (  ( sqlite3_bind_text(stmt, 1, node->interface->name, -1, SQLITE_TRANSIENT) ) == SQLITE_OK  ) &&
-                              (  ( sqlite3_bind_text(stmt, 2, node->interface->unit, -1, SQLITE_TRANSIENT) ) == SQLITE_OK  ) &&
-                              (  ( sqlite3_bind_int(stmt, 3, node->interface->exponent) ) == SQLITE_OK  )   )
-                        {
-                            if ( sqlite3_step(stmt) == SQLITE_DONE ) {
-                                // Successfully added new row for interface
-                                // Note: If the "IGNORE" is executed, it still succeeds and we don't know when this gets added or not.  But it does seem to work.
-                                //DEBUG//printf("Added new interface to database: %s, %s, %d\r\n", node->interface->name, node->interface->unit, node->interface->exponent);
-                            }
-                            else {
-                                fprintf(stderr, "Failed to execute INSERT statement: %s\n", sqlite3_errmsg(db));
-                                failed = true;
-                            }
-                        }
-                        else {
-                            fprintf(stderr, "Failed to bind INSERT arguments: %s\n", sqlite3_errmsg(db));
-                            failed = true;
-                        }
-                    }
-                    else {
-                        fprintf(stderr, "Failed to prepare INSERT statement: %s\n", sqlite3_errmsg(db));
-                        failed = true;
-                    }
-//                }
-//                else {
-//                    fprintf(stderr, "Failed to execute SELECT statement: %s\n", sqlite3_errmsg(db));
-//                    failed = TRUE;
-//                }
-//            }
-//            else {
-//                fprintf(stderr, "Failed to bind SELECT arguments: %s\n", sqlite3_errmsg(db));
-//                failed = TRUE;
-//            }
-//        }
-//        else {
-//            fprintf(stderr, "Failed to prepare SELECT statement: %s\n", sqlite3_errmsg(db));
-//            failed = TRUE;
-//        }
+        if( sqlite3_prepare_v2(db, "INSERT OR IGNORE INTO interface (name,unit,exponent) VALUES(?1,?2,?3);", -1, &stmt, NULL) == SQLITE_OK ) {
+            if(   (  ( sqlite3_bind_text(stmt, 1, node->interface->name, -1, SQLITE_TRANSIENT) ) == SQLITE_OK  ) &&
+                  (  ( sqlite3_bind_text(stmt, 2, node->interface->unit, -1, SQLITE_TRANSIENT) ) == SQLITE_OK  ) &&
+                  (  ( sqlite3_bind_int(stmt, 3, node->interface->exponent) ) == SQLITE_OK  )   )
+            {
+                if ( sqlite3_step(stmt) == SQLITE_DONE ) {
+                    // Successfully added new row for interface
+                    // Note: If the "IGNORE" is executed, it still succeeds and we don't know when this gets added or not.  But it does seem to work.
+                    //DEBUG//printf("Added new interface to database: %s, %s, %d\r\n", node->interface->name, node->interface->unit, node->interface->exponent);
+                }
+                else {
+                    fprintf(stderr, "Failed to execute INSERT statement: %s\n", sqlite3_errmsg(db));
+                    failed = true;
+                }
+            }
+            else {
+                fprintf(stderr, "Failed to bind INSERT arguments: %s\n", sqlite3_errmsg(db));
+                failed = true;
+            }
+        }
+        else {
+            fprintf(stderr, "Failed to prepare INSERT statement: %s\n", sqlite3_errmsg(db));
+            failed = true;
+        }
 
         if(failed) {
             fprintf(stderr, "Error while finding or creating interface in database\n");
             return;
         }
     }
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 
@@ -671,6 +639,33 @@ void *ProcessSunrise(void *param) {
     }
 }
 
+void *ProcessLocal(void *param) {
+  float temperature;
+  int payloadlen;
+  char payload[10];
+  char topic[20];
+
+  while(running) {
+    for(int i = 0; i < sensorList->SensorCount; i++) {
+      temperature = ReadTemperature(sensorList->Sensors[i]);
+
+      //sprintf(payload, "%0.1f", temperature);
+      //payloadlen = strlen(payload);
+
+      //sprintf(topic, "og/temperature/%d", i);
+
+      //mosquitto_publish(mqtt, NULL, topic, payloadlen, payload, 0, false);
+
+      // Note: for this to work, local interfaces need to be added first!
+      //LogToDatabase(topic, (int)(temperature * 10), timestamp());
+
+      PublishRequestReturn(0xFF00 + i, (int)(temperature * 10));
+    }
+
+    sleep(5);
+  }
+}
+
 // Sends a message to the device requesting that it output all of its available interfaces
 void RequestInterfaces(void) {
     serialPutchar(fd, '\x02');
@@ -681,7 +676,7 @@ void RequestInterfaces(void) {
 
 int main (int argc, char** argv) {
 	char client_id[30];
-    int rc;
+  int rc;
 
 	signal(SIGINT, SignalHandler);
 	signal(SIGHUP, SignalHandler);
@@ -741,11 +736,30 @@ int main (int argc, char** argv) {
 		return 1;
 	}
 
+  // SETUP DIRECTLY CONNECTED DEVICES
+  sensorNames = NULL;
+  sensorNamesCount = 0;
+
+  sensorList = GetSensors(sensorNames, sensorNamesCount);
+
+  if (sensorList->SensorCount == 0) {
+    fprintf (stderr, "No temperature sensors found");
+  }
+  else {
+    // Add local interfaces to database storage
+    for(int i = 0; i < sensorList->SensorCount; i++) {
+      char name[20];
+      snprintf(name, sizeof(name), "og/temperature/%d", i);
+      AddInterface( &interface_root, NewInterface(0xFF00 + i, 2, -1, AM_READ, name, "°C" ) );
+    }
+  }
+
 	// SETUP THREADS
     // TODO: Check return code, exit with error if any of these threads can't be created
-	pthread_create(&process_rx_thread, NULL, ProcessReceiveThread, NULL);
+  pthread_create(&process_rx_thread, NULL, ProcessReceiveThread, NULL);
 	//pthread_create(&process_tx_thread, NULL, ProcessTransmitThread, NULL);
-    pthread_create(&process_sunrise, NULL, ProcessSunrise, NULL);
+  pthread_create(&process_sunrise_thread, NULL, ProcessSunrise, NULL);
+  pthread_create(&process_local_thread, NULL, ProcessLocal, NULL);
 
 	sd_notify (0, "READY=1");
 
@@ -764,7 +778,8 @@ int main (int argc, char** argv) {
 	printf("Waiting for threads to terminate...\r\n"); fflush(NULL);
 	pthread_join(process_rx_thread, NULL);
 	//pthread_join(process_tx_thread, NULL);
-    pthread_join(process_sunrise, NULL);
+    pthread_join(process_sunrise_thread, NULL);
+    pthread_join(process_local_thread, NULL);
 	printf("...threads terminated\r\n"); fflush(NULL);
 
     printf("Stopping mosquitto client...\r\n"); fflush(NULL);

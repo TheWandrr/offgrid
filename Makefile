@@ -1,27 +1,35 @@
-LDFLAGS = -lwiringPi -lpthread -lsystemd -lmosquitto -lsqlite3
+TARGET = offgrid-daemon
+LIBS = -lm -lwiringPi -lpthread -lsystemd -lmosquitto -lsqlite3
+CC = gcc
+#CFLAGS = -Wall -fvisibility=hidden # Release
+CFLAGS = -g -O0 -fvisibility=hidden # Debugging
 
 DB_EXISTS := $(or $(and $(wildcard /usr/local/lib/mqtt.db),1),0)
 
-#.PHONY: all clean
+.PHONY: default all clean
 
-all : offgrid-daemon
+default: $(TARGET)
+all: default
 
-offgrid-daemon : offgrid-daemon.o
-	${CXX} $^ -o $@ ${LDFLAGS}
+OBJECTS = $(patsubst %.c, %.o, $(wildcard *.c))
+HEADERS = $(wildcard *.h)
 
-#parse_message.o : parse_message.c
-#	${CXX} -c $^ -o $@ ${CFLAGS}
+%.o: %.c $(HEADERS)
+	$(CC) $(CFLAGS) -c $< -o $@
 
-#mqtt_manager.o : mqtt_manager.cpp
-#	${CXX} -c $^ -o $@ ${CFLAGS}
+.PRECIOUS: $(TARGET) $(OBJECTS)
 
-#io_controller.o : io_controller.cpp
-#	${CXX} -c $^ -o $@ ${CFLAGS}
+$(TARGET): $(OBJECTS)
+	$(CC) $(OBJECTS) -Wall $(LIBS) -o $@
 
-clean :
-	@-rm -f *.o offgrid-daemon
+#offgrid-daemon : offgrid-daemon.o
+#	${CXX} $^ -o $@ ${LDFLAGS}
 
-install : all
+clean:
+	@-rm -f *.o
+	@-rm -f $(TARGET)
+
+install: all
 ifeq ($(DB_EXISTS), 0)
 	@sqlite3 /usr/local/lib/mqtt.db < mqtt_db_schema.sql
 endif
