@@ -52,6 +52,7 @@ struct Interface {
     uint8_t bytes;
     int8_t exponent;
     enum InterfaceAccessMask access_mask;
+    bool enable_logging;
     char name[255];
     char unit[15];
     long data; // Not part of interface definition
@@ -113,7 +114,7 @@ void AddInterface(struct Node **node, struct Interface *interface) {
     new_node->next = (*node);
     (*node) = new_node;
 
-    printf("Add interface: %s\r\n", (*node)->interface->name); fflush(NULL);
+    printf("Add interface: %s, Logging enabled: %c\r\n", (*node)->interface->name, interface->enable_logging ? 'Y' : 'N'); fflush(NULL);
 }
 
 // Search for topic by name or address (but not both!)
@@ -138,7 +139,7 @@ struct Node* FindInterface(struct Node *node, const char *name, uint16_t address
     return NULL;
 }
 
-struct Interface * NewInterface(uint16_t address, uint8_t bytes, int8_t exponent, enum InterfaceAccessMask access_mask, const char *name, const char *unit) {
+struct Interface * NewInterface(uint16_t address, uint8_t bytes, int8_t exponent, enum InterfaceAccessMask access_mask, uint8_t enable_logging, const char *name, const char *unit) {
     struct Interface *interface = NULL;
 
     interface = (struct Interface *)malloc(sizeof(struct Interface));
@@ -148,6 +149,8 @@ struct Interface * NewInterface(uint16_t address, uint8_t bytes, int8_t exponent
         interface->bytes = bytes;
         interface->exponent = exponent;
         interface->access_mask = access_mask;
+        //interface->enable_logging = enable_logging == 1 ? true : false;
+        interface->enable_logging = true;
         strcpy(interface->name, name);
         strcpy(interface->unit, unit);
 
@@ -272,7 +275,7 @@ void ParseMessage(const char *msg_buf) {
     }
 
     // DEBUG //
-    //printf("ParseMessage(\"%s\")\n", msg_buf);
+    //printf("ParseMessage(\"%s\")\n", msg_buf); fflush(NULL);
     // DEBUG //
 
     // Move through the string with two pointers, locating the start and end of each token
@@ -343,15 +346,15 @@ void ParseMessage(const char *msg_buf) {
     	break;
 
         case MSG_RETURN_INTERFACE:
-            if(arg_count == 7) {
+            if(arg_count == 8) {
                 // TODO: Replace with cleaner quote trimming function
                 // Trim first and last characters of string (that really should be the double quotes)
                 unsigned int len;
                 if(  ( len = strlen(arg[5]) ) >= 2 ) { memmove(arg[5], arg[5]+1, len-2); *(arg[5]+len-2) = '\0'; }
                 if(  ( len = strlen(arg[6]) ) >= 2 ) { memmove(arg[6], arg[6]+1, len-2); *(arg[6]+len-2) = '\0'; }
 
-                //TODO: Prevent the addition of a duplicate
-                AddInterface( &interface_root, NewInterface((uint16_t)strtoul(arg[1], NULL, 16), (uint8_t)strtoul(arg[2], NULL, 16), (int8_t)strtol(arg[3], NULL, 16), (uint8_t)strtoul(arg[4], NULL, 16), arg[5], arg[6]) );
+                AddInterface( &interface_root, NewInterface((uint16_t)strtoul(arg[1], NULL, 16), (uint8_t)strtoul(arg[2], NULL, 16),
+                              (int8_t)strtol(arg[3], NULL, 16), (uint8_t)strtoul(arg[4], NULL, 16), (uint8_t)strtol(arg[5], NULL, 16) , arg[6], arg[7]) );
             }
         break;
 
@@ -412,8 +415,9 @@ void PublishRequestReturn(unsigned int address, long data) {
 
         mosquitto_publish(mqtt, NULL, interface->name, payloadlen, payload, 0, false);
 
-        // Only store to database if it has changed since the last time
-        if( interface->data != data ) {
+        // Only store to database if it has changed since the last time and it is flagged to be logged
+        if( (interface->data != data) && (interface->enable_logging == true) ) {
+        //if( interface->data != data ) {
             LogToDatabase(interface->name, data, now);
 
             interface->data_timestamp = now;
@@ -750,7 +754,7 @@ int main (int argc, char** argv) {
     for(int i = 0; i < sensorList->SensorCount; i++) {
       char name[20];
       snprintf(name, sizeof(name), "og/temperature/%d", i);
-      AddInterface( &interface_root, NewInterface(0xFF00 + i, 2, -1, AM_READ, name, "°C" ) );
+      AddInterface( &interface_root, NewInterface(0xFF00 + i, 2, -1, AM_READ, true, name, "°C" ) );
     }
   }
 
