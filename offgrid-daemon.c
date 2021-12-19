@@ -154,7 +154,7 @@ struct Interface * NewInterface(uint16_t address, uint8_t bytes, int8_t exponent
         strcpy(interface->name, name);
         strcpy(interface->unit, unit);
 
-        printf("NewInterface(): %0.4x, %d, %d, %d, %d, %s, %s\r\n", address, bytes, exponent, access_mask, enable_logging, name, unit); fflush(NULL);
+        //printf("NewInterface(): %0.4x, %d, %d, %d, %d, %s, %s\r\n", address, bytes, exponent, access_mask, enable_logging, name, unit); fflush(NULL);
     }
     else {
         printf("Could not allocate memory for new interface\r\n"); fflush(NULL);
