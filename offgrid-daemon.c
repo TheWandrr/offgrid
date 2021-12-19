@@ -149,12 +149,12 @@ struct Interface * NewInterface(uint16_t address, uint8_t bytes, int8_t exponent
         interface->bytes = bytes;
         interface->exponent = exponent;
         interface->access_mask = access_mask;
-        //interface->enable_logging = enable_logging == 1 ? true : false;
+        //interface->enable_logging = (enable_logging != 0);
         interface->enable_logging = true;
         strcpy(interface->name, name);
         strcpy(interface->unit, unit);
 
-        //printf("NewInterface(): %0.4x, %d, %d, %d, %s, %s\r\n", address, bytes, exponent, access_mask, name, unit); fflush(NULL);
+        printf("NewInterface(): %0.4x, %d, %d, %d, %d, %s, %s\r\n", address, bytes, exponent, access_mask, enable_logging, name, unit); fflush(NULL);
     }
     else {
         printf("Could not allocate memory for new interface\r\n"); fflush(NULL);
