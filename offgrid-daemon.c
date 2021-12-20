@@ -15,22 +15,12 @@
 #include <sqlite3.h>
 #include <mosquitto.h>
 #include <wiringSerial.h>
-//#include <argp.h>
 
 #include "offgrid_constants.h"
 #include "ds18b20.h"
 
 // TODO: Improve CPU usage
 // TODO: Implement control over how much information is output to logs
-
-//const char *argp_program_version = "offgrid-daemon 0.0.1";
-//const char *argp_program_bug_address = "";
-
-//static char doc[] = "Offgrid hardware daemon -- UART to MQTT bridge";
-
-void ParseMessage(const char *msg_buf);
-void PublishRequestReturn(unsigned int address, long data);
-void LogToDatabase(const char *topic, const long data, const uint64_t now);
 
 enum ReceiveState {
     GET_STX,
@@ -46,25 +36,22 @@ enum InterfaceAccessMask {
 
 // This structure is shared with firmware and defines topic interfaces
 // In this module, it is the data contained within a linked list where nodes are added as the device reports/exposes them
-// TODO: Add ability to enable/disable database logging (command line, config file, ?)
 struct Interface {
     uint16_t address;
     uint8_t bytes;
     int8_t exponent;
     enum InterfaceAccessMask access_mask;
-    bool enable_logging;
+    uint8_t enable_logging;
     char name[255];
     char unit[15];
-    long data; // Not part of interface definition
-    uint64_t data_timestamp; // Not part of interface definition
+    long data; // Not part of firmware interface definition
+    uint64_t data_timestamp; // Not part of firmware interface definition
 };
 
 struct Node {
     struct Interface *interface;
     struct Node *next;
 };
-
-
 
 struct Node *interface_root = NULL;
 
@@ -84,10 +71,15 @@ static char message_buffer[1023] = {0};
 sqlite3 *db;
 const char *DB_FILENAME = "/usr/local/lib/mqtt.db"; // TODO: Make this configurable via config file and/or command line
 
+// Locally attached DS18B20 temperature sensors
 char **sensorNames;
 int sensorNamesCount;
 SensorList *sensorList;
 
+
+void ParseMessage(const char *msg_buf);
+void PublishRequestReturn(unsigned int address, long data);
+void LogToDatabase(struct Interface *interface, const long data, const uint64_t now);
 
 /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -100,7 +92,10 @@ void FreeInterfaces(struct Node *node) {
     FreeInterfaces(node->next);
 
     if(node->interface != NULL) {
-        printf("Free interface: %s\r\n", node->interface->name); fflush(NULL);
+        // DEBUG
+        //printf("Free interface: %s\r\n", node->interface->name); fflush(NULL);
+        // DEBUG
+
         free(node->interface);
     }
     free(node);
@@ -114,7 +109,13 @@ void AddInterface(struct Node **node, struct Interface *interface) {
     new_node->next = (*node);
     (*node) = new_node;
 
-    printf("Add interface: %s, Logging enabled: %c\r\n", (*node)->interface->name, interface->enable_logging ? 'Y' : 'N'); fflush(NULL);
+    // DEBUG //
+    //printf("Add interface: name: %s\r\n\taccess_mask: %d\r\n\tenable_logging: %d\r\n",
+    //       (*node)->interface->name,
+    //       (*node)->interface->access_mask,
+    //       (*node)->interface->enable_logging);
+    //       fflush(NULL);
+    // DEBUG //
 }
 
 // Search for topic by name or address (but not both!)
@@ -132,7 +133,6 @@ struct Node* FindInterface(struct Node *node, const char *name, uint16_t address
                 return current;
             }
         }
-
         current = current->next;
     }
 
@@ -149,12 +149,13 @@ struct Interface * NewInterface(uint16_t address, uint8_t bytes, int8_t exponent
         interface->bytes = bytes;
         interface->exponent = exponent;
         interface->access_mask = access_mask;
-        //interface->enable_logging = (enable_logging != 0);
-        interface->enable_logging = true;
+        interface->enable_logging = enable_logging;
         strcpy(interface->name, name);
         strcpy(interface->unit, unit);
 
+        // DEBUG //
         //printf("NewInterface(): %0.4x, %d, %d, %d, %d, %s, %s\r\n", address, bytes, exponent, access_mask, enable_logging, name, unit); fflush(NULL);
+        // DEBUG //
     }
     else {
         printf("Could not allocate memory for new interface\r\n"); fflush(NULL);
@@ -164,15 +165,23 @@ struct Interface * NewInterface(uint16_t address, uint8_t bytes, int8_t exponent
 }
 
 // Based on a negative or positive power of ten, create a format string with the same decimal places
-void MakeFormatString(char *fmt, int8_t exponent) {
-    if(exponent >= 0) {
-        fmt = "%0.0f";
-    }
-    else {
-        sprintf(fmt, "%%0.%df", abs(exponent));
-    }
+//void MakeFormatString(char *fmt, int8_t exponent) {
+unsigned int FormatPayload(char *buff, float n, int8_t exp) {
+  char fmt[15];
+  double val;
+  unsigned int len;
 
-    //printf("MakeFormatString(): \"%s\"\r\n", fmt);
+  val = (double)n * pow(10, exp);
+
+  if (exp >= 0) {
+    len = sprintf(buff, "%d", (long)trunc(val));
+  }
+  else if (exp < 0) {
+    sprintf(fmt, "%%0.%df", abs(exp));
+    len = sprintf(buff, fmt, val);
+  }
+
+  return len;
 }
 
 // Returns epoch time in whole centiseconds (seconds * 0.01)
@@ -350,11 +359,11 @@ void ParseMessage(const char *msg_buf) {
                 // TODO: Replace with cleaner quote trimming function
                 // Trim first and last characters of string (that really should be the double quotes)
                 unsigned int len;
-                if(  ( len = strlen(arg[5]) ) >= 2 ) { memmove(arg[5], arg[5]+1, len-2); *(arg[5]+len-2) = '\0'; }
                 if(  ( len = strlen(arg[6]) ) >= 2 ) { memmove(arg[6], arg[6]+1, len-2); *(arg[6]+len-2) = '\0'; }
+                if(  ( len = strlen(arg[7]) ) >= 2 ) { memmove(arg[7], arg[7]+1, len-2); *(arg[7]+len-2) = '\0'; }
 
                 AddInterface( &interface_root, NewInterface((uint16_t)strtoul(arg[1], NULL, 16), (uint8_t)strtoul(arg[2], NULL, 16),
-                              (int8_t)strtol(arg[3], NULL, 16), (uint8_t)strtoul(arg[4], NULL, 16), (uint8_t)strtol(arg[5], NULL, 16) , arg[6], arg[7]) );
+                              (int8_t)strtol(arg[3], NULL, 16), (uint8_t)strtoul(arg[4], NULL, 16), (uint8_t)strtoul(arg[5], NULL, 16), arg[6], arg[7]) );
             }
         break;
 
@@ -394,7 +403,6 @@ void PublishRequestReturn(unsigned int address, long data) {
     uint64_t now;
     struct Node *node;
     struct Interface *interface;
-    char fmt[15];
 
     // DEBUG //
     //printf("PublishRequestReturn(): %0.4X, %d\r\n", address, data);
@@ -406,8 +414,9 @@ void PublishRequestReturn(unsigned int address, long data) {
         interface = node->interface;
 
         now = timestamp();
-        MakeFormatString(fmt, interface->exponent),
-        payloadlen = sprintf( payload, fmt,  (double)data * pow(10, interface->exponent) );
+        payloadlen = FormatPayload(payload, data, interface->exponent);
+        //MakeFormatString(fmt, interface->exponent),
+        //payloadlen = sprintf( payload, fmt,  (double)data * pow(10, interface->exponent) );
 
         // DEBUG //
         //printf("<PUT-MQTT> %s = %s\r\n", interface->name, payload); fflush(NULL);
@@ -416,10 +425,8 @@ void PublishRequestReturn(unsigned int address, long data) {
         mosquitto_publish(mqtt, NULL, interface->name, payloadlen, payload, 0, false);
 
         // Only store to database if it has changed since the last time and it is flagged to be logged
-        if( (interface->data != data) && (interface->enable_logging == true) ) {
-        //if( interface->data != data ) {
-            LogToDatabase(interface->name, data, now);
-
+        if( (interface->data != data) && (interface->enable_logging != 0) ) {
+            LogToDatabase(interface, data, now);
             interface->data_timestamp = now;
             interface->data = data;
         }
@@ -439,22 +446,27 @@ void PublishRequestReturn(unsigned int address, long data) {
 //    return 0;
 //}
 
-void LogToDatabase(const char *topic, const long data, const uint64_t now) {
+void LogToDatabase(struct Interface *interface, const long data, const uint64_t now) {
     char *err_msg = 0;
     int rc;
     sqlite3_stmt *stmt;
     int row_count;
-    struct Node *node;
+    //struct Node *node;
     bool failed;
+
+    // Inhibit logging if it's disabled or the last written value is the same as current
+    //if ( (interface->enable_logging == 0) || (interface->data == data) ) {
+    //  return;
+    //}
 
     failed = false;
 
     // TODO: Look up topic.  If it doesn't exist, add it before inserting the message.
-    if( (node = FindInterface(interface_root, topic, 0)) != NULL ) {
+    //if( (node = FindInterface(interface_root, topic, 0)) != NULL ) {
         if( sqlite3_prepare_v2(db, "INSERT OR IGNORE INTO interface (name,unit,exponent) VALUES(?1,?2,?3);", -1, &stmt, NULL) == SQLITE_OK ) {
-            if(   (  ( sqlite3_bind_text(stmt, 1, node->interface->name, -1, SQLITE_TRANSIENT) ) == SQLITE_OK  ) &&
-                  (  ( sqlite3_bind_text(stmt, 2, node->interface->unit, -1, SQLITE_TRANSIENT) ) == SQLITE_OK  ) &&
-                  (  ( sqlite3_bind_int(stmt, 3, node->interface->exponent) ) == SQLITE_OK  )   )
+            if(   (  ( sqlite3_bind_text(stmt, 1, interface->name, -1, SQLITE_TRANSIENT) ) == SQLITE_OK  ) &&
+                  (  ( sqlite3_bind_text(stmt, 2, interface->unit, -1, SQLITE_TRANSIENT) ) == SQLITE_OK  ) &&
+                  (  ( sqlite3_bind_int(stmt, 3, interface->exponent) ) == SQLITE_OK  )   )
             {
                 if ( sqlite3_step(stmt) == SQLITE_DONE ) {
                     // Successfully added new row for interface
@@ -480,7 +492,7 @@ void LogToDatabase(const char *topic, const long data, const uint64_t now) {
             fprintf(stderr, "Error while finding or creating interface in database\n");
             return;
         }
-    }
+    //}
 
 
 
@@ -500,7 +512,7 @@ void LogToDatabase(const char *topic, const long data, const uint64_t now) {
         fprintf(stderr, "Failed to bind timestamp: %s\n", sqlite3_errmsg(db));
     }
 
-    rc = sqlite3_bind_text(stmt, 3, topic, -1, SQLITE_TRANSIENT);
+    rc = sqlite3_bind_text(stmt, 3, interface->name, -1, SQLITE_TRANSIENT);
     if(rc != SQLITE_OK) {
         fprintf(stderr, "Failed to bind topic: %s\n", sqlite3_errmsg(db));
     }
@@ -652,17 +664,6 @@ void *ProcessLocal(void *param) {
   while(running) {
     for(int i = 0; i < sensorList->SensorCount; i++) {
       temperature = ReadTemperature(sensorList->Sensors[i]);
-
-      //sprintf(payload, "%0.1f", temperature);
-      //payloadlen = strlen(payload);
-
-      //sprintf(topic, "og/temperature/%d", i);
-
-      //mosquitto_publish(mqtt, NULL, topic, payloadlen, payload, 0, false);
-
-      // Note: for this to work, local interfaces need to be added first!
-      //LogToDatabase(topic, (int)(temperature * 10), timestamp());
-
       PublishRequestReturn(0xFF00 + i, (int)(temperature * 10));
     }
 
@@ -673,7 +674,7 @@ void *ProcessLocal(void *param) {
 // Sends a message to the device requesting that it output all of its available interfaces
 void RequestInterfaces(void) {
     serialPutchar(fd, '\x02');
-    printf("<< <UART> MSG_GET_INTERFACE\r\n"); fflush(NULL);
+    //printf("<< <UART> MSG_GET_INTERFACE\r\n"); fflush(NULL);
     serialPrintf( fd, "%0.2X", (uint8_t)MSG_GET_INTERFACE );
     serialPutchar(fd, '\x03');
 }
@@ -714,6 +715,9 @@ int main (int argc, char** argv) {
         fprintf (stderr, "Unable to open serial device: %s\n", strerror(errno));
         return 1;
     }
+
+    fflush(NULL);
+
 	// SETUP MQTT
 	mosquitto_lib_init();
 	snprintf(client_id, sizeof(client_id)-1, "offgrid-daemon-%d", getpid());
