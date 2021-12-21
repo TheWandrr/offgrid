@@ -158,7 +158,8 @@ struct Interface * NewInterface(uint16_t address, uint8_t bytes, int8_t exponent
         // DEBUG //
     }
     else {
-        printf("Could not allocate memory for new interface\r\n"); fflush(NULL);
+        printf("Could not allocate memory for new interface\r\n");
+        fflush(NULL);
     }
 
     return interface;
@@ -167,21 +168,21 @@ struct Interface * NewInterface(uint16_t address, uint8_t bytes, int8_t exponent
 // Based on a negative or positive power of ten, create a format string with the same decimal places
 //void MakeFormatString(char *fmt, int8_t exponent) {
 unsigned int FormatPayload(char *buff, float n, int8_t exp) {
-  char fmt[15];
-  double val;
-  unsigned int len;
+    char fmt[15];
+    double val;
+    unsigned int len;
 
-  val = (double)n * pow(10, exp);
+    val = (double)n * pow(10, exp);
 
-  if (exp >= 0) {
-    len = sprintf(buff, "%d", (long)trunc(val));
-  }
-  else if (exp < 0) {
-    sprintf(fmt, "%%0.%df", abs(exp));
-    len = sprintf(buff, fmt, val);
-  }
+    if (exp >= 0) {
+        len = sprintf(buff, "%d", (long)trunc(val));
+    }
+    else if (exp < 0) {
+        sprintf(fmt, "%%0.%df", abs(exp));
+        len = sprintf(buff, fmt, val);
+    }
 
-  return len;
+    return len;
 }
 
 // Returns epoch time in whole centiseconds (seconds * 0.01)
@@ -195,7 +196,7 @@ uint64_t timestamp(void) {
 
 void SignalHandler(int signum)
 {
-	running = 0;
+    running = 0;
 }
 
 // TODO: Change this to a variadic function so we can use format strings and arguments
@@ -206,69 +207,88 @@ void SignalHandler(int signum)
 //}
 
 void *ProcessReceiveThread(void *param) {
-	static enum ReceiveState receive_state = GET_STX;
-	char c;
+    static enum ReceiveState receive_state = GET_STX;
+    char c;
 
-	while(running) {
+    while(running) {
 
-		if(serialDataAvail(fd)) {
-			switch(receive_state) {
-				case GET_STX:
-					//received_message = false;
-					if( (c = serialGetchar(fd)) == '\x02' ) {
-						////Serial.print("<STX>");
-						strncpy(message_buffer, "", sizeof(message_buffer));
-						receive_state = GET_DATA;
-					}
-				break;
+        if(serialDataAvail(fd)) {
+            switch(receive_state) {
+            case GET_STX:
+                //received_message = false;
+                if( (c = serialGetchar(fd)) == '\x02' ) {
+                    ////Serial.print("<STX>");
+                    strncpy(message_buffer, "", sizeof(message_buffer));
+                    receive_state = GET_DATA;
+                }
+                break;
 
-				case GET_DATA:
-					c = serialGetchar(fd);
+            case GET_DATA:
+                c = serialGetchar(fd);
 
-					if( isprint(c) ) {
-						// Valid data, save/buffer it for later
-						////Serial.print(c);
-						strncat(message_buffer, &c, 1);
-					}
-					else if( c == '\x03' ) {
-						////Serial.println("<ETX>");
-						ParseMessage(message_buffer);
-						receive_state = GET_STX;
-					}
-					else if( c == '\x02' ) {
-						// ERROR - expected ETX before STX
-						////Serial.print("   <<<   MISSING ETX\r\n<RECOVER-STX>");
-						printf("<UART> ERROR: New packet began before previous packet finished\r\n");
-						strncpy(message_buffer, "", sizeof(message_buffer));
-					}
-				break;
+                if( isprint(c) ) {
+                    // Valid data, save/buffer it for later
+                    ////Serial.print(c);
+                    strncat(message_buffer, &c, 1);
+                }
+                else if( c == '\x03' ) {
+                    ////Serial.println("<ETX>");
+                    ParseMessage(message_buffer);
+                    receive_state = GET_STX;
+                }
+                else if( c == '\x02' ) {
+                    // ERROR - expected ETX before STX
+                    ////Serial.print("   <<<   MISSING ETX\r\n<RECOVER-STX>");
+                    printf("<UART> ERROR: New packet began before previous packet finished\r\n");
+                    strncpy(message_buffer, "", sizeof(message_buffer));
+                }
+                break;
 
-			}
-		}
+            }
+        }
         else {
             usleep(1000);
         }
-	}
+    }
 }
 
 unsigned int asciiHexToInt(char ch) {
-  unsigned int num = 0;
-  if( (ch >= '0') && (ch <= '9') ) {
-    num = ch - '0';
-  }
-  else {
-    switch(ch) {
-      case 'A': case 'a': num = 10; break;
-      case 'B': case 'b': num = 11; break;
-      case 'C': case 'c': num = 12; break;
-      case 'D': case 'd': num = 13; break;
-      case 'E': case 'e': num = 14; break;
-      case 'F': case 'f': num = 15; break;
-      default: num = 0;
+    unsigned int num = 0;
+    if( (ch >= '0') && (ch <= '9') ) {
+        num = ch - '0';
     }
-  }
+    else {
+        switch(ch) {
+        case 'A':
+        case 'a':
+            num = 10;
+            break;
+        case 'B':
+        case 'b':
+            num = 11;
+            break;
+        case 'C':
+        case 'c':
+            num = 12;
+            break;
+        case 'D':
+        case 'd':
+            num = 13;
+            break;
+        case 'E':
+        case 'e':
+            num = 14;
+            break;
+        case 'F':
+        case 'f':
+            num = 15;
+            break;
+        default:
+            num = 0;
+        }
+    }
 
-  return num;
+    return num;
 }
 
 // TODO: Add trimming white space from beginning and end of arguments
@@ -294,7 +314,9 @@ void ParseMessage(const char *msg_buf) {
     while ( *b != '\0' ) {
         sep = (arg_count == 0) ? ':' : ','; // First time through separator is colon, the rest a comma
 
-        while( (*b != sep) && (*b != '\0') ) { b++; } // Advance end pointer to next separator
+        while( (*b != sep) && (*b != '\0') ) {
+            b++;    // Advance end pointer to next separator
+        }
 
         strncpy(arg[arg_count], a, b - a);
         arg[arg_count][b-a] = '\0';
@@ -330,51 +352,62 @@ void ParseMessage(const char *msg_buf) {
 //    		}
 //    	break;
 
-    	case MSG_GET_SET_ERROR:
-    		if(arg_count == 2) {
-    			printf(">> <UART> MSG_GET_SET_ERROR: %0.2X\r\n", (uint8_t)strtoul(arg[1], NULL, 16)); fflush(NULL);
-    		}
-    	break;
-
-    	case MSG_RETURN_8_8:
-    		if(arg_count == 3) {
-    			PublishRequestReturn( (uint8_t)strtoul(arg[1], NULL, 16), (int8_t)strtol(arg[2], NULL, 16) );
-    		}
-    	break;
-
-    	case MSG_RETURN_8_16:
-    		if(arg_count == 3) {
-    			PublishRequestReturn( (uint8_t)strtoul(arg[1], NULL, 16), (int16_t)strtol(arg[2], NULL, 16) );
-    		}
-    	break;
-
-    	case MSG_RETURN_8_32:
-    		if(arg_count == 3) {
-    			PublishRequestReturn( (uint8_t)strtoul(arg[1], NULL, 16), (int32_t)strtoll(arg[2], NULL, 16) );
-    		}
-    	break;
-
-        case MSG_RETURN_INTERFACE:
-            if(arg_count == 8) {
-                // TODO: Replace with cleaner quote trimming function
-                // Trim first and last characters of string (that really should be the double quotes)
-                unsigned int len;
-                if(  ( len = strlen(arg[6]) ) >= 2 ) { memmove(arg[6], arg[6]+1, len-2); *(arg[6]+len-2) = '\0'; }
-                if(  ( len = strlen(arg[7]) ) >= 2 ) { memmove(arg[7], arg[7]+1, len-2); *(arg[7]+len-2) = '\0'; }
-
-                AddInterface( &interface_root, NewInterface((uint16_t)strtoul(arg[1], NULL, 16), (uint8_t)strtoul(arg[2], NULL, 16),
-                              (int8_t)strtol(arg[3], NULL, 16), (uint8_t)strtoul(arg[4], NULL, 16), (uint8_t)strtoul(arg[5], NULL, 16), arg[6], arg[7]) );
-            }
+    case MSG_GET_SET_ERROR:
+        if(arg_count == 2) {
+            printf(">> <UART> MSG_GET_SET_ERROR: %0.2X\r\n", (uint8_t)strtoul(arg[1], NULL, 16));
+            fflush(NULL);
+        }
         break;
 
-        case MSG_DEBUG_STRING:
-            if(arg_count == 2) {
-                // Trim first and last characters of string (that really should be the double quotes)
-                unsigned int len;
-                if(  ( len = strlen(arg[1]) ) >= 2 ) { memmove(arg[1], arg[1]+1, len-2); *(arg[1]+len-2) = '\0'; }
+    case MSG_RETURN_8_8:
+        if(arg_count == 3) {
+            PublishRequestReturn( (uint8_t)strtoul(arg[1], NULL, 16), (int8_t)strtol(arg[2], NULL, 16) );
+        }
+        break;
 
-                printf("<<< DEBUG >>> %s\n", arg[1]); fflush(NULL);
+    case MSG_RETURN_8_16:
+        if(arg_count == 3) {
+            PublishRequestReturn( (uint8_t)strtoul(arg[1], NULL, 16), (int16_t)strtol(arg[2], NULL, 16) );
+        }
+        break;
+
+    case MSG_RETURN_8_32:
+        if(arg_count == 3) {
+            PublishRequestReturn( (uint8_t)strtoul(arg[1], NULL, 16), (int32_t)strtoll(arg[2], NULL, 16) );
+        }
+        break;
+
+    case MSG_RETURN_INTERFACE:
+        if(arg_count == 8) {
+            // TODO: Replace with cleaner quote trimming function
+            // Trim first and last characters of string (that really should be the double quotes)
+            unsigned int len;
+            if(  ( len = strlen(arg[6]) ) >= 2 ) {
+                memmove(arg[6], arg[6]+1, len-2);
+                *(arg[6]+len-2) = '\0';
             }
+            if(  ( len = strlen(arg[7]) ) >= 2 ) {
+                memmove(arg[7], arg[7]+1, len-2);
+                *(arg[7]+len-2) = '\0';
+            }
+
+            AddInterface( &interface_root, NewInterface((uint16_t)strtoul(arg[1], NULL, 16), (uint8_t)strtoul(arg[2], NULL, 16),
+                          (int8_t)strtol(arg[3], NULL, 16), (uint8_t)strtoul(arg[4], NULL, 16), (uint8_t)strtoul(arg[5], NULL, 16), arg[6], arg[7]) );
+        }
+        break;
+
+    case MSG_DEBUG_STRING:
+        if(arg_count == 2) {
+            // Trim first and last characters of string (that really should be the double quotes)
+            unsigned int len;
+            if(  ( len = strlen(arg[1]) ) >= 2 ) {
+                memmove(arg[1], arg[1]+1, len-2);
+                *(arg[1]+len-2) = '\0';
+            }
+
+            printf("<<< DEBUG >>> %s\n", arg[1]);
+            fflush(NULL);
+        }
         break;
 
     }
@@ -383,13 +416,13 @@ void ParseMessage(const char *msg_buf) {
 
 // Not strictly necessary but will allow control of message sending frequency
 void *ProcessTransmitThread(void *param) {
-	while(running) {
+    while(running) {
         //if(tx_ready) {
         //}
         //else {
         //    usleep(100);
         //}
-	}
+    }
 }
 
 // TODO: enqueueMessage - add message to transmit queue, use variadic function printf style
@@ -398,8 +431,8 @@ void *ProcessTransmitThread(void *param) {
 //}
 
 void PublishRequestReturn(unsigned int address, long data) {
-	char payload[256];
-	int payloadlen;
+    char payload[256];
+    int payloadlen;
     uint64_t now;
     struct Node *node;
     struct Interface *interface;
@@ -463,35 +496,35 @@ void LogToDatabase(struct Interface *interface, const long data, const uint64_t 
 
     // TODO: Look up topic.  If it doesn't exist, add it before inserting the message.
     //if( (node = FindInterface(interface_root, topic, 0)) != NULL ) {
-        if( sqlite3_prepare_v2(db, "INSERT OR IGNORE INTO interface (name,unit,exponent) VALUES(?1,?2,?3);", -1, &stmt, NULL) == SQLITE_OK ) {
-            if(   (  ( sqlite3_bind_text(stmt, 1, interface->name, -1, SQLITE_TRANSIENT) ) == SQLITE_OK  ) &&
-                  (  ( sqlite3_bind_text(stmt, 2, interface->unit, -1, SQLITE_TRANSIENT) ) == SQLITE_OK  ) &&
-                  (  ( sqlite3_bind_int(stmt, 3, interface->exponent) ) == SQLITE_OK  )   )
-            {
-                if ( sqlite3_step(stmt) == SQLITE_DONE ) {
-                    // Successfully added new row for interface
-                    // Note: If the "IGNORE" is executed, it still succeeds and we don't know when this gets added or not.  But it does seem to work.
-                    //DEBUG//printf("Added new interface to database: %s, %s, %d\r\n", node->interface->name, node->interface->unit, node->interface->exponent);
-                }
-                else {
-                    fprintf(stderr, "Failed to execute INSERT statement: %s\n", sqlite3_errmsg(db));
-                    failed = true;
-                }
+    if( sqlite3_prepare_v2(db, "INSERT OR IGNORE INTO interface (name,unit,exponent) VALUES(?1,?2,?3);", -1, &stmt, NULL) == SQLITE_OK ) {
+        if(   (  ( sqlite3_bind_text(stmt, 1, interface->name, -1, SQLITE_TRANSIENT) ) == SQLITE_OK  ) &&
+                (  ( sqlite3_bind_text(stmt, 2, interface->unit, -1, SQLITE_TRANSIENT) ) == SQLITE_OK  ) &&
+                (  ( sqlite3_bind_int(stmt, 3, interface->exponent) ) == SQLITE_OK  )   )
+        {
+            if ( sqlite3_step(stmt) == SQLITE_DONE ) {
+                // Successfully added new row for interface
+                // Note: If the "IGNORE" is executed, it still succeeds and we don't know when this gets added or not.  But it does seem to work.
+                //DEBUG//printf("Added new interface to database: %s, %s, %d\r\n", node->interface->name, node->interface->unit, node->interface->exponent);
             }
             else {
-                fprintf(stderr, "Failed to bind INSERT arguments: %s\n", sqlite3_errmsg(db));
+                fprintf(stderr, "Failed to execute INSERT statement: %s\n", sqlite3_errmsg(db));
                 failed = true;
             }
         }
         else {
-            fprintf(stderr, "Failed to prepare INSERT statement: %s\n", sqlite3_errmsg(db));
+            fprintf(stderr, "Failed to bind INSERT arguments: %s\n", sqlite3_errmsg(db));
             failed = true;
         }
+    }
+    else {
+        fprintf(stderr, "Failed to prepare INSERT statement: %s\n", sqlite3_errmsg(db));
+        failed = true;
+    }
 
-        if(failed) {
-            fprintf(stderr, "Error while finding or creating interface in database\n");
-            return;
-        }
+    if(failed) {
+        fprintf(stderr, "Error while finding or creating interface in database\n");
+        return;
+    }
     //}
 
 
@@ -544,13 +577,14 @@ void message_callback(struct mosquitto *mosq, void *obj, const struct mosquitto_
 //    int i;
     char *suffix_set = "/set"; // Append to a topic to write a value
     char *suffix_get = "/get"; // Append to a topic to force it to be published immediately
+    // TODO: Add more suffixes to get metadata like broadcast period, precision, units, read/write access
     char topic[255];
     int newlen;
-	char payload[16];
-	int payloadlen;
+    char payload[16];
+    int payloadlen;
     struct Node *node;
 
-	//DEBUG//printf("<GET-MQTT> %s = %s\r\n", message->topic, message->payload); fflush(NULL);
+    //DEBUG//printf("<GET-MQTT> %s = %s\r\n", message->topic, message->payload); fflush(NULL);
 
     // *** If message ends with "/set", it needs to be handled differently
     if( StringHasSuffix(message->topic, suffix_set) ) {
@@ -573,27 +607,27 @@ void message_callback(struct mosquitto *mosq, void *obj, const struct mosquitto_
 
                 switch(node->interface->bytes) {
 
-                    case 1:
-		                //DEBUG//printf("<< <UART> MSG_SET_8_8: %0.2X, %0.2X\r\n", (uint8_t)node->interface->address, (uint8_t)( atof(message->payload) / pow(10, node->interface->exponent) ) ); fflush(NULL);
-	                    serialPrintf( fd, "%0.2X:%0.2X,%0.2X", (uint8_t)MSG_SET_8_8, (uint8_t)node->interface->address, (int8_t)( atof(message->payload) / pow(10, node->interface->exponent) ) );
+                case 1:
+                    //DEBUG//printf("<< <UART> MSG_SET_8_8: %0.2X, %0.2X\r\n", (uint8_t)node->interface->address, (uint8_t)( atof(message->payload) / pow(10, node->interface->exponent) ) ); fflush(NULL);
+                    serialPrintf( fd, "%0.2X:%0.2X,%0.2X", (uint8_t)MSG_SET_8_8, (uint8_t)node->interface->address, (int8_t)( atof(message->payload) / pow(10, node->interface->exponent) ) );
                     break;
 
-                    case 2:
-           		        //DEBUG//printf("<< <UART> MSG_SET_8_16: %0.2X, %0.4X\r\n", (uint8_t)node->interface->address, (uint16_t)( atof(message->payload) / pow(10, node->interface->exponent) ) ); fflush(NULL);
-                        serialPrintf( fd, "%0.2X:%0.2X,%0.4X", (uint8_t)MSG_SET_8_16, (uint8_t)node->interface->address, (int16_t)( atof(message->payload) / pow(10, node->interface->exponent) ) );
+                case 2:
+                    //DEBUG//printf("<< <UART> MSG_SET_8_16: %0.2X, %0.4X\r\n", (uint8_t)node->interface->address, (uint16_t)( atof(message->payload) / pow(10, node->interface->exponent) ) ); fflush(NULL);
+                    serialPrintf( fd, "%0.2X:%0.2X,%0.4X", (uint8_t)MSG_SET_8_16, (uint8_t)node->interface->address, (int16_t)( atof(message->payload) / pow(10, node->interface->exponent) ) );
                     break;
 
 //                    case 3:
 //	                      serialPrintf( fd, "0.2X:%0.2X,%0.6X", (uint8_t)MSG_SET_8_24, (uint8_t)lookup_map[i].address, (uint32_t)(atoi(message->payload)) );
 //                    break;
 
-                    case 4:
-		                //DEBUG//printf("<< <UART> MSG_SET_8_32: %0.2X, %0.8lX\r\n", (uint8_t)node->interface->address, (uint32_t)( atof(message->payload) / pow(10, node->interface->exponent) ) ); fflush(NULL);
-	                    serialPrintf( fd, "%0.2X:%0.2X,%0.8lX", (uint8_t)MSG_SET_8_32, (uint8_t)node->interface->address, (int32_t)( atof(message->payload) / pow(10, node->interface->exponent) ) );
+                case 4:
+                    //DEBUG//printf("<< <UART> MSG_SET_8_32: %0.2X, %0.8lX\r\n", (uint8_t)node->interface->address, (uint32_t)( atof(message->payload) / pow(10, node->interface->exponent) ) ); fflush(NULL);
+                    serialPrintf( fd, "%0.2X:%0.2X,%0.8lX", (uint8_t)MSG_SET_8_32, (uint8_t)node->interface->address, (int32_t)( atof(message->payload) / pow(10, node->interface->exponent) ) );
                     break;
 
-                    default:
-                        fprintf(stderr, "Unhandled number of bytes (%d) in %s", node->interface->bytes, node->interface->name);
+                default:
+                    fprintf(stderr, "Unhandled number of bytes (%d) in %s", node->interface->bytes, node->interface->name);
                 }
 
                 serialPutchar(fd, '\x03');
@@ -619,27 +653,27 @@ void message_callback(struct mosquitto *mosq, void *obj, const struct mosquitto_
 
                 switch(node->interface->bytes) {
 
-                    case 1:
-                        //DEBUG//printf("<< <UART> MSG_GET_8_8: %0.2X\r\n", (uint8_t)node->interface->address ); fflush(NULL);
-		                    serialPrintf( fd, "%0.2X:%0.2X", (uint8_t)MSG_GET_8_8, (uint8_t)node->interface->address );
+                case 1:
+                    //DEBUG//printf("<< <UART> MSG_GET_8_8: %0.2X\r\n", (uint8_t)node->interface->address ); fflush(NULL);
+                    serialPrintf( fd, "%0.2X:%0.2X", (uint8_t)MSG_GET_8_8, (uint8_t)node->interface->address );
                     break;
 
-                    case 2:
-		           	        //DEBUG//printf("<< <UART> MSG_GET_8_16: %0.2X\r\n", (uint8_t)node->interface->address ); fflush(NULL);
-                        serialPrintf( fd, "%0.2X:%0.2X", (uint8_t)MSG_GET_8_16, (uint8_t)node->interface->address );
+                case 2:
+                    //DEBUG//printf("<< <UART> MSG_GET_8_16: %0.2X\r\n", (uint8_t)node->interface->address ); fflush(NULL);
+                    serialPrintf( fd, "%0.2X:%0.2X", (uint8_t)MSG_GET_8_16, (uint8_t)node->interface->address );
                     break;
 
 //                    case 3:
 //		                  serialPrintf( fd, "0.2X:%0.2X", (uint8_t)MSG_GET_8_24 );
 //                    break;
 
-                    case 4:
-			                  //DEBUG//printf("<< <UART> MSG_GET_8_32: %0.2X\r\n", (uint8_t)node->interface->address ); fflush(NULL);
-		                    serialPrintf( fd, "%0.2X:%0.2X", (uint8_t)MSG_GET_8_32, (uint8_t)node->interface->address );
+                case 4:
+                    //DEBUG//printf("<< <UART> MSG_GET_8_32: %0.2X\r\n", (uint8_t)node->interface->address ); fflush(NULL);
+                    serialPrintf( fd, "%0.2X:%0.2X", (uint8_t)MSG_GET_8_32, (uint8_t)node->interface->address );
                     break;
 
-                    default:
-                        fprintf(stderr, "Unhandled number of bytes (%d) in %s", node->interface->bytes, node->interface->name);
+                default:
+                    fprintf(stderr, "Unhandled number of bytes (%d) in %s", node->interface->bytes, node->interface->name);
                 }
 
                 serialPutchar(fd, '\x03');
@@ -656,19 +690,19 @@ void *ProcessSunrise(void *param) {
 }
 
 void *ProcessLocal(void *param) {
-  float temperature;
-  int payloadlen;
-  char payload[10];
-  char topic[20];
+    float temperature;
+    int payloadlen;
+    char payload[10];
+    char topic[20];
 
-  while(running) {
-    for(int i = 0; i < sensorList->SensorCount; i++) {
-      temperature = ReadTemperature(sensorList->Sensors[i]);
-      PublishRequestReturn(0xFF00 + i, (int)(temperature * 10));
+    while(running) {
+        for(int i = 0; i < sensorList->SensorCount; i++) {
+            temperature = ReadTemperature(sensorList->Sensors[i]);
+            PublishRequestReturn(0xFF00 + i, (int)(temperature * 10));
+        }
+
+        sleep(5);
     }
-
-    sleep(5);
-  }
 }
 
 // Sends a message to the device requesting that it output all of its available interfaces
@@ -680,14 +714,14 @@ void RequestInterfaces(void) {
 }
 
 int main (int argc, char** argv) {
-	char client_id[30];
-  int rc;
+    char client_id[30];
+    int rc;
 
-	signal(SIGINT, SignalHandler);
-	signal(SIGHUP, SignalHandler);
-	signal(SIGTERM, SignalHandler);
+    signal(SIGINT, SignalHandler);
+    signal(SIGHUP, SignalHandler);
+    signal(SIGTERM, SignalHandler);
 
-	// SETUP DATABASE
+    // SETUP DATABASE
     rc = sqlite3_open(DB_FILENAME, &db);
     if (rc != SQLITE_OK) {
         fprintf (stderr, "Can't open database: %s\n\r", sqlite3_errmsg(db));
@@ -695,7 +729,7 @@ int main (int argc, char** argv) {
         return 1;
     }
 
-	// SETUP UART
+    // SETUP UART
     // TODO: This needs to be made into a configuration setting
     // TODO: It seems to change on its own.  Auto detect?
 
@@ -718,90 +752,96 @@ int main (int argc, char** argv) {
 
     fflush(NULL);
 
-	// SETUP MQTT
-	mosquitto_lib_init();
-	snprintf(client_id, sizeof(client_id)-1, "offgrid-daemon-%d", getpid());
+    // SETUP MQTT
+    mosquitto_lib_init();
+    snprintf(client_id, sizeof(client_id)-1, "offgrid-daemon-%d", getpid());
 
-	if( (mqtt = mosquitto_new(client_id, true, NULL)) != NULL ) { // TODO: Replace NULL with pointer to data structure that will be passed to callbacks
-		mosquitto_message_callback_set(mqtt, message_callback);
+    if( (mqtt = mosquitto_new(client_id, true, NULL)) != NULL ) { // TODO: Replace NULL with pointer to data structure that will be passed to callbacks
+        mosquitto_message_callback_set(mqtt, message_callback);
 
-		if( (mosquitto_connect(mqtt, mqtt_host, mqtt_port, 15)) == MOSQ_ERR_SUCCESS ) {
-			if( (mosquitto_subscribe(mqtt, NULL, "og/#", 0)) == MOSQ_ERR_SUCCESS ) {
-			    mosquitto_loop_start(mqtt);
+        if( (mosquitto_connect(mqtt, mqtt_host, mqtt_port, 15)) == MOSQ_ERR_SUCCESS ) {
+            if( (mosquitto_subscribe(mqtt, NULL, "og/#", 0)) == MOSQ_ERR_SUCCESS ) {
+                mosquitto_loop_start(mqtt);
             }
             else {
                 fprintf (stderr, "Unable to subscribe to main topic: %s\n", strerror(errno));
                 return 1;
             }
-		}
-		else {
+        }
+        else {
             fprintf (stderr, "Unable to connect with MQTT broker (%s:%s): %s\n", mqtt_host, mqtt_port, strerror(errno));
             return 1;
-		}
-	}
-	else {
-        fprintf (stderr, "Unable to create MQTT client: %s\n", strerror(errno));
-		return 1;
-	}
-
-  // SETUP DIRECTLY CONNECTED DEVICES
-  sensorNames = NULL;
-  sensorNamesCount = 0;
-
-  sensorList = GetSensors(sensorNames, sensorNamesCount);
-
-  if (sensorList->SensorCount == 0) {
-    fprintf (stderr, "No temperature sensors found");
-  }
-  else {
-    // Add local interfaces to database storage
-    for(int i = 0; i < sensorList->SensorCount; i++) {
-      char name[20];
-      snprintf(name, sizeof(name), "og/temperature/%d", i);
-      AddInterface( &interface_root, NewInterface(0xFF00 + i, 2, -1, AM_READ, true, name, "°C" ) );
+        }
     }
-  }
+    else {
+        fprintf (stderr, "Unable to create MQTT client: %s\n", strerror(errno));
+        return 1;
+    }
 
-	// SETUP THREADS
+    // SETUP DIRECTLY CONNECTED DEVICES
+    sensorNames = NULL;
+    sensorNamesCount = 0;
+
+    sensorList = GetSensors(sensorNames, sensorNamesCount);
+
+    if (sensorList->SensorCount == 0) {
+        fprintf (stderr, "No temperature sensors found");
+    }
+    else {
+        // Add local interfaces to database storage
+        for(int i = 0; i < sensorList->SensorCount; i++) {
+            char name[20];
+            snprintf(name, sizeof(name), "og/temperature/%d", i);
+            AddInterface( &interface_root, NewInterface(0xFF00 + i, 2, -1, AM_READ, true, name, "°C" ) );
+        }
+    }
+
+    // SETUP THREADS
     // TODO: Check return code, exit with error if any of these threads can't be created
-  pthread_create(&process_rx_thread, NULL, ProcessReceiveThread, NULL);
-	//pthread_create(&process_tx_thread, NULL, ProcessTransmitThread, NULL);
-  pthread_create(&process_sunrise_thread, NULL, ProcessSunrise, NULL);
-  pthread_create(&process_local_thread, NULL, ProcessLocal, NULL);
+    pthread_create(&process_rx_thread, NULL, ProcessReceiveThread, NULL);
+    //pthread_create(&process_tx_thread, NULL, ProcessTransmitThread, NULL);
+    pthread_create(&process_sunrise_thread, NULL, ProcessSunrise, NULL);
+    pthread_create(&process_local_thread, NULL, ProcessLocal, NULL);
 
-	sd_notify (0, "READY=1");
+    sd_notify (0, "READY=1");
 
     RequestInterfaces();
 
-	while(running) {
-		sleep(5);
-		sd_notify(0, "WATCHDOG=1");
-	}
+    while(running) {
+        sleep(5);
+        sd_notify(0, "WATCHDOG=1");
+    }
 
 
     // CLEANUP CODE ONLY BEYOND THIS POINT
 
     FreeInterfaces(interface_root);
 
-	printf("Waiting for threads to terminate...\r\n"); fflush(NULL);
-	pthread_join(process_rx_thread, NULL);
-	//pthread_join(process_tx_thread, NULL);
+    printf("Waiting for threads to terminate...\r\n");
+    fflush(NULL);
+    pthread_join(process_rx_thread, NULL);
+    //pthread_join(process_tx_thread, NULL);
     pthread_join(process_sunrise_thread, NULL);
     pthread_join(process_local_thread, NULL);
-	printf("...threads terminated\r\n"); fflush(NULL);
+    printf("...threads terminated\r\n");
+    fflush(NULL);
 
-    printf("Stopping mosquitto client...\r\n"); fflush(NULL);
-	mosquitto_loop_stop(mqtt, true);
-	mosquitto_destroy(mqtt);
-	mosquitto_lib_cleanup();
-    printf("...mosquitto client stopped\r\n"); fflush(NULL);
+    printf("Stopping mosquitto client...\r\n");
+    fflush(NULL);
+    mosquitto_loop_stop(mqtt, true);
+    mosquitto_destroy(mqtt);
+    mosquitto_lib_cleanup();
+    printf("...mosquitto client stopped\r\n");
+    fflush(NULL);
 
-    printf("Terminating database connection...\r\n"); fflush(NULL);
+    printf("Terminating database connection...\r\n");
+    fflush(NULL);
     sqlite3_close(db);
     sqlite3_shutdown();
-    printf("...database connection terminated\r\n"); fflush(NULL);
+    printf("...database connection terminated\r\n");
+    fflush(NULL);
 
-	return (EXIT_SUCCESS);
+    return (EXIT_SUCCESS);
 }
 
 
