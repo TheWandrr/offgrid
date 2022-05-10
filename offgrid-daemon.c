@@ -405,6 +405,7 @@ void ParseMessage(const char *msg_buf) {
                 *(arg[1]+len-2) = '\0';
             }
 
+            //printf("<<< DEBUG [%016llX] >>> %s\n", timestamp(), arg[1]);
             printf("<<< DEBUG >>> %s\n", arg[1]);
             fflush(NULL);
         }
@@ -691,14 +692,29 @@ void *ProcessSunrise(void *param) {
 
 void *ProcessLocal(void *param) {
     float temperature;
-    int payloadlen;
-    char payload[10];
-    char topic[20];
+    uint64_t now;
+    char now_str[64];
 
     while(running) {
+
+        // Send 64-bit timestamp, high 32 bits first then low 32 bits
+        now = timestamp() / 10; // Convert to milliseconds
+        //serialPutchar(fd, '\x02');
+        //serialPrintf( fd, "%0.2X:%0.2X,%0.8lX", (uint8_t)MSG_SET_8_32, (uint8_t)0xF0, (int32_t)( now >> 32 ) );
+        //serialPrintf( fd, "%0.2X:%0.2X,%0.8lX", (uint8_t)MSG_SET_8_32, (uint8_t)0xF1, (int32_t)( now ) );
+        //serialPutchar(fd, '\x03');
+
+        sprintf(now_str, "%ul", now >> 32);
+        mosquitto_publish(mqtt, NULL, "og/system_clock_h/set", strlen(now_str), now_str, 0, false);
+        sprintf(now_str, "%ul", now);
+        mosquitto_publish(mqtt, NULL, "og/system_clock_l/set", strlen(now_str), now_str, 0, false);
+
         for(int i = 0; i < sensorList->SensorCount; i++) {
             temperature = ReadTemperature(sensorList->Sensors[i]);
-            PublishRequestReturn(0xFF00 + i, (int)(temperature * 10));
+            // TODO: Replace hard-coded address for temperature sensors with...?
+            serialPutchar(fd, '\x02');
+            serialPrintf( fd, "%0.2X:%0.2X,%0.4X", (uint8_t)MSG_SET_8_16, (uint8_t)0xF0 + i, (int16_t)( temperature * 10 ) );
+            serialPutchar(fd, '\x03');
         }
 
         sleep(5);
@@ -784,17 +800,17 @@ int main (int argc, char** argv) {
 
     sensorList = GetSensors(sensorNames, sensorNamesCount);
 
-    if (sensorList->SensorCount == 0) {
-        fprintf (stderr, "No temperature sensors found");
-    }
-    else {
-        // Add local interfaces to database storage
-        for(int i = 0; i < sensorList->SensorCount; i++) {
-            char name[20];
-            snprintf(name, sizeof(name), "og/temperature/%d", i);
-            AddInterface( &interface_root, NewInterface(0xFF00 + i, 2, -1, AM_READ, true, name, "°C" ) );
-        }
-    }
+//    if (sensorList->SensorCount == 0) {
+//        fprintf (stderr, "No temperature sensors found");
+//    }
+//    else {
+//        // Add local interfaces to database storage
+//        for(int i = 0; i < sensorList->SensorCount; i++) {
+//            char name[20];
+//            snprintf(name, sizeof(name), "og/temperature/%d", i);
+//            AddInterface( &interface_root, NewInterface(0xFF00 + i, 2, -1, AM_READ, true, name, "°C" ) );
+//        }
+//    }
 
     // SETUP THREADS
     // TODO: Check return code, exit with error if any of these threads can't be created
