@@ -8,8 +8,9 @@ Code for the Arduino board may be found here: https://github.com/TheWandrr/offgr
 
 # Building and Installing
 
-  > make
-  > sudo make install
+
+      > make
+      > sudo make install
 
   *** Note that there may be additional packages to install. Let me know and I'll add them here to help others in the future.
 
