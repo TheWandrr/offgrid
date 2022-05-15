@@ -6,6 +6,13 @@ This project has been developed using a Raspberry Pi 3B+, "Raspberry Pi Meet Ard
 
 Code for the Arduino board may be found here: https://github.com/TheWandrr/offgrid_arduino
 
+# Building and Installing
+
+  > make
+  > sudo make install
+
+  *** Note that there may be additional packages to install. Let me know and I'll add them here to help others in the future.
+
 # Purpose
 
 The Raspberry Pi is connected via serial link to the Arduino. The functions of the Raspberry Pi are as follows:
